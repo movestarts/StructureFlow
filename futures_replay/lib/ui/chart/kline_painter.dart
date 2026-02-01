@@ -8,6 +8,11 @@ class KlinePainter extends CustomPainter {
   final List<Trade> allTrades;
   final ChartViewController viewController;
   final double currentPrice;
+  
+  // 均线数据
+  final List<double?> ma10;
+  final List<double?> ma20;
+  final bool showMA;
 
   final Paint _wickPaint = Paint()..strokeWidth = 1.0;
   final Paint _candlePaint = Paint()..style = PaintingStyle.fill;
@@ -15,6 +20,8 @@ class KlinePainter extends CustomPainter {
   final Paint _linePaint = Paint()..strokeWidth = 1.5..style = PaintingStyle.stroke;
   final Paint _gridPaint = Paint()..color = Colors.white10..strokeWidth = 0.5;
   final Paint _markerPaint = Paint()..style = PaintingStyle.fill;
+  final Paint _ma10Paint = Paint()..color = Colors.yellow..strokeWidth = 1.0..style = PaintingStyle.stroke;
+  final Paint _ma20Paint = Paint()..color = Colors.cyan..strokeWidth = 1.0..style = PaintingStyle.stroke;
 
   final Color upColor = const Color(0xFFEF5350);
   final Color downColor = const Color(0xFF26A69A);
@@ -24,6 +31,9 @@ class KlinePainter extends CustomPainter {
     required this.allTrades,
     required this.viewController,
     required this.currentPrice,
+    this.ma10 = const [],
+    this.ma20 = const [],
+    this.showMA = true,
   });
 
   @override
@@ -32,7 +42,6 @@ class KlinePainter extends CustomPainter {
 
     final double plottingWidth = size.width - 60.0;
     
-    // 获取可见范围
     int startIdx = viewController.visibleStartIndex.clamp(0, allData.length);
     int endIdx = viewController.visibleEndIndex.clamp(0, allData.length);
     
@@ -41,7 +50,6 @@ class KlinePainter extends CustomPainter {
     final visibleData = allData.sublist(startIdx, endIdx);
     if (visibleData.isEmpty) return;
 
-    // 计算价格范围
     double maxHigh = -double.infinity;
     double minLow = double.infinity;
     double maxVol = -double.infinity;
@@ -50,6 +58,22 @@ class KlinePainter extends CustomPainter {
       if (k.high > maxHigh) maxHigh = k.high;
       if (k.low < minLow) minLow = k.low;
       if (k.volume > maxVol) maxVol = k.volume;
+    }
+    
+    // 考虑MA范围
+    if (showMA) {
+      for (int i = startIdx; i < endIdx && i < ma10.length; i++) {
+        if (ma10[i] != null) {
+          if (ma10[i]! > maxHigh) maxHigh = ma10[i]!;
+          if (ma10[i]! < minLow) minLow = ma10[i]!;
+        }
+      }
+      for (int i = startIdx; i < endIdx && i < ma20.length; i++) {
+        if (ma20[i] != null) {
+          if (ma20[i]! > maxHigh) maxHigh = ma20[i]!;
+          if (ma20[i]! < minLow) minLow = ma20[i]!;
+        }
+      }
     }
     
     final double priceRange = maxHigh - minLow;
@@ -70,7 +94,6 @@ class KlinePainter extends CustomPainter {
       return size.height - (vol / (maxVol == 0 ? 1 : maxVol)) * volHeight;
     }
 
-    // 获取X坐标（基于时间）
     double? getXForTime(DateTime time) {
       final idx = allData.indexWhere((k) => k.time.isAtSameMomentAs(time) || k.time.isAfter(time));
       if (idx == -1 || idx < startIdx || idx >= endIdx) return null;
@@ -107,6 +130,12 @@ class KlinePainter extends CustomPainter {
       final volRect = Rect.fromLTRB(x - candleWidth/2, getVolY(k.volume), x + candleWidth/2, size.height);
       _volumePaint.color = color.withOpacity(0.5);
       canvas.drawRect(volRect, _volumePaint);
+    }
+    
+    // 绘制均线
+    if (showMA) {
+      _drawMA(canvas, startIdx, endIdx, step, getY, _ma10Paint, ma10);
+      _drawMA(canvas, startIdx, endIdx, step, getY, _ma20Paint, ma20);
     }
     
     // 绘制价格轴
@@ -209,6 +238,35 @@ class KlinePainter extends CustomPainter {
           textPainter.paint(canvas, Offset(10, y - 20));
         }
       }
+    }
+  }
+  
+  void _drawMA(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY, Paint paint, List<double?> maData) {
+    if (maData.isEmpty) return;
+    
+    Path path = Path();
+    bool started = false;
+    
+    for (int i = 0; i < (endIdx - startIdx); i++) {
+      int dataIdx = startIdx + i;
+      if (dataIdx >= maData.length) break;
+      
+      double? value = maData[dataIdx];
+      if (value == null) continue;
+      
+      double x = i * step + step / 2;
+      double y = getY(value);
+      
+      if (!started) {
+        path.moveTo(x, y);
+        started = true;
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    
+    if (started) {
+      canvas.drawPath(path, paint);
     }
   }
 

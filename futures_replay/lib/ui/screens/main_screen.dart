@@ -4,7 +4,9 @@ import '../../models/kline_model.dart';
 import '../../models/period.dart';
 import '../../engine/replay_engine.dart';
 import '../../engine/trade_engine.dart';
+import '../../services/indicator_service.dart';
 import '../chart/kline_painter.dart';
+import '../chart/macd_painter.dart';
 import '../chart/chart_view_controller.dart';
 import '../../models/trade_model.dart';
 
@@ -28,9 +30,19 @@ class _MainScreenState extends State<MainScreen> {
   late ReplayEngine _replayEngine;
   late TradeEngine _tradeEngine;
   late ChartViewController _chartController;
-  Period _currentPeriod = Period.m5;
+  final IndicatorService _indicatorService = IndicatorService();
   
+  Period _currentPeriod = Period.m5;
   bool _isInitialized = false;
+  
+  // 指标开关
+  bool _showMA = true;
+  bool _showMACD = true;
+  
+  // 指标数据缓存
+  List<double?> _ma10 = [];
+  List<double?> _ma20 = [];
+  MACDResult _macdData = MACDResult(dif: [], dea: [], macdBar: []);
 
   @override
   void initState() {
@@ -40,6 +52,7 @@ class _MainScreenState extends State<MainScreen> {
     _chartController = ChartViewController();
     
     _replayEngine.addListener(_onReplayUpdate);
+    _updateIndicators();
   }
   
   @override
@@ -51,7 +64,19 @@ class _MainScreenState extends State<MainScreen> {
   void _onReplayUpdate() {
     if (_isInitialized) {
       _chartController.updateDataLength(_replayEngine.displayKlines.length);
+      _updateIndicators();
     }
+  }
+  
+  void _updateIndicators() {
+    final data = _replayEngine.displayKlines;
+    if (data.isEmpty) return;
+    
+    setState(() {
+      _ma10 = _indicatorService.calculateMA(data, 10);
+      _ma20 = _indicatorService.calculateMA(data, 20);
+      _macdData = _indicatorService.calculateMACD(data);
+    });
   }
 
   @override
@@ -66,6 +91,30 @@ class _MainScreenState extends State<MainScreen> {
         appBar: AppBar(
           title: const Text("期货复盘训练"),
           actions: [
+            // MA开关
+            Row(
+              children: [
+                const Text('MA', style: TextStyle(fontSize: 12)),
+                Switch(
+                  value: _showMA,
+                  onChanged: (v) => setState(() => _showMA = v),
+                  activeColor: Colors.yellow,
+                ),
+              ],
+            ),
+            // MACD开关
+            Row(
+              children: [
+                const Text('MACD', style: TextStyle(fontSize: 12)),
+                Switch(
+                  value: _showMACD,
+                  onChanged: (v) => setState(() => _showMACD = v),
+                  activeColor: Colors.cyan,
+                ),
+              ],
+            ),
+            const SizedBox(width: 10),
+            // 周期选择
             DropdownButton<Period>(
               value: _currentPeriod,
               dropdownColor: Colors.grey[800],
@@ -74,18 +123,14 @@ class _MainScreenState extends State<MainScreen> {
               onChanged: (p) {
                 if (p != null) {
                   int currentIdx = _replayEngine.currentProgress;
-                  
-                  // 移除旧监听器
                   _replayEngine.removeListener(_onReplayUpdate);
                   
                   setState(() {
                     _currentPeriod = p;
-                    // 创建新引擎
                     _replayEngine = ReplayEngine(widget.allData, _currentPeriod, startIndex: currentIdx, limit: widget.limit);
-                    // 添加新监听器
                     _replayEngine.addListener(_onReplayUpdate);
-                    // 重置图表初始化状态
                     _isInitialized = false;
+                    _updateIndicators();
                   });
                 }
               },
@@ -99,9 +144,9 @@ class _MainScreenState extends State<MainScreen> {
         ),
         body: Column(
           children: [
-            // Chart Area
+            // 主图区域
             Expanded(
-              flex: 3,
+              flex: _showMACD ? 5 : 7,
               child: Consumer3<ReplayEngine, TradeEngine, ChartViewController>(
                 builder: (context, replay, trade, chartCtrl, child) {
                   return LayoutBuilder(
@@ -139,6 +184,9 @@ class _MainScreenState extends State<MainScreen> {
                                     allTrades: trade.allTrades,
                                     viewController: chartCtrl,
                                     currentPrice: replay.currentQuote?.close ?? 0,
+                                    ma10: _ma10,
+                                    ma20: _ma20,
+                                    showMA: _showMA,
                                   ),
                                 )
                               : const Center(child: CircularProgressIndicator()),
@@ -150,7 +198,30 @@ class _MainScreenState extends State<MainScreen> {
               ),
             ),
             
-            // Info Bar
+            // MACD副图
+            if (_showMACD)
+              Expanded(
+                flex: 2,
+                child: Consumer<ChartViewController>(
+                  builder: (context, chartCtrl, child) {
+                    return Container(
+                      color: Colors.black,
+                      width: double.infinity,
+                      child: _isInitialized
+                          ? CustomPaint(
+                              painter: MACDPainter(
+                                macdData: _macdData,
+                                viewController: chartCtrl,
+                                dataLength: _replayEngine.displayKlines.length,
+                              ),
+                            )
+                          : const SizedBox(),
+                    );
+                  },
+                ),
+              ),
+            
+            // 信息栏
             Consumer2<ReplayEngine, TradeEngine>(
               builder: (ctx, replay, trade, _) {
                  final quote = replay.currentQuote;
@@ -161,20 +232,23 @@ class _MainScreenState extends State<MainScreen> {
                    child: Row(
                      mainAxisAlignment: MainAxisAlignment.spaceAround,
                      children: [
-                       Text("价格: ${price.toStringAsFixed(1)}", style: const TextStyle(color: Colors.white, fontSize: 16)),
+                       Text("价格: ${price.toStringAsFixed(1)}", style: const TextStyle(color: Colors.white, fontSize: 14)),
+                       if (_showMA && _ma10.isNotEmpty && _ma10.last != null)
+                         Text("MA10: ${_ma10.last!.toStringAsFixed(1)}", style: const TextStyle(color: Colors.yellow, fontSize: 12)),
+                       if (_showMA && _ma20.isNotEmpty && _ma20.last != null)
+                         Text("MA20: ${_ma20.last!.toStringAsFixed(1)}", style: const TextStyle(color: Colors.cyan, fontSize: 12)),
                        Text("持仓: ${trade.activePositions.length}", style: const TextStyle(color: Colors.white)),
                        Text("浮盈: ${trade.calculateFloatingPnL(price).toStringAsFixed(0)}", 
                           style: TextStyle(color: trade.calculateFloatingPnL(price) >= 0 ? Colors.red : Colors.green)),
-                       Text("权益: ${trade.totalEquity.toStringAsFixed(0)}", style: const TextStyle(color: Colors.white)),
                      ],
                    ),
                  );
               }
             ),
 
-            // Controls
+            // 控制区
             Expanded(
-              flex: 1,
+              flex: 2,
               child: Row(
                 children: [
                   Expanded(
