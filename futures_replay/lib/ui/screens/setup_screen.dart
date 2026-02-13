@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'dart:io'; // Added
+import 'package:path_provider/path_provider.dart'; // Added
 import '../../services/data_service.dart';
 import '../../models/kline_model.dart';
 import '../../models/period.dart';
@@ -35,9 +37,52 @@ class _SetupScreenState extends State<SetupScreen> {
   String? _selectedFilePath;
   String? _selectedFileName;
   String _instrumentCode = '';
+  List<File> _cachedFiles = []; // Added
 
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _countController = TextEditingController(text: '100');
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCachedFiles();
+  }
+
+  Future<void> _loadCachedFiles() async {
+    try {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      List<File> allFiles = [];
+
+      // 1. Check default ImportData path: Documents/cryptotrainer/csv
+      final baseDir = Directory('${appDocDir.path}${Platform.pathSeparator}cryptotrainer${Platform.pathSeparator}csv');
+      if (await baseDir.exists()) {
+        // Futures
+        final futuresDir = Directory('${baseDir.path}${Platform.pathSeparator}futures');
+        if (await futuresDir.exists()) {
+          allFiles.addAll(futuresDir.listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.csv')));
+        }
+        // Crypto
+        final cryptoDir = Directory('${baseDir.path}${Platform.pathSeparator}crypto');
+        if (await cryptoDir.exists()) {
+          allFiles.addAll(cryptoDir.listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.csv')));
+        }
+      }
+
+      // 2. Check simple data_cache (legacy or manual)
+      final simpleCacheDir = Directory('${appDocDir.path}${Platform.pathSeparator}data_cache');
+      if (await simpleCacheDir.exists()) {
+        allFiles.addAll(simpleCacheDir.listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.csv')));
+      }
+
+      if (mounted) {
+        setState(() {
+          _cachedFiles = allFiles;
+        });
+      }
+    } catch (e) {
+      debugPrint("加载缓存文件失败: $e");
+    }
+  }
 
   @override
   void dispose() {
@@ -60,7 +105,6 @@ class _SetupScreenState extends State<SetupScreen> {
           _selectedFileName = result.files.single.name;
           _isLoading = true;
           _error = null;
-          // 从文件名提取品种代码
           _instrumentCode = _selectedFileName!
               .replaceAll('.csv', '')
               .replaceAll(RegExp(r'[_\-\d]'), '')
@@ -88,7 +132,7 @@ class _SetupScreenState extends State<SetupScreen> {
           _allData = data;
           _isLoading = false;
           if (data.isNotEmpty) {
-            _selectedDate = data.last.time; // 默认选最后的日期
+            _selectedDate = data.last.time;
           }
         });
       }
@@ -105,15 +149,25 @@ class _SetupScreenState extends State<SetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppColors.lightBg,
       appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 20),
+          icon: const Icon(Icons.close, color: AppColors.lightTextPrimary, size: 22),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('多空复盘配置'),
+        title: const Text(
+          '多空复盘配置',
+          style: TextStyle(
+            color: AppColors.lightTextPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, size: 22),
+          TextButton.icon(
             onPressed: () {
               setState(() {
                 _allData = [];
@@ -122,11 +176,16 @@ class _SetupScreenState extends State<SetupScreen> {
                 _error = null;
               });
             },
+            icon: Icon(Icons.refresh, color: AppColors.primary, size: 18),
+            label: Text(
+              '刷新数据',
+              style: TextStyle(color: AppColors.primary, fontSize: 14),
+            ),
           ),
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -197,18 +256,27 @@ class _SetupScreenState extends State<SetupScreen> {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.primary : Colors.transparent,
+            color: isSelected ? AppColors.primary : Colors.white,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
-              color: isSelected ? AppColors.primary : AppColors.borderLight,
+              color: isSelected ? AppColors.primary : AppColors.lightBorder,
               width: 1,
             ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: AppColors.primary.withOpacity(0.3),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    )
+                  ]
+                : null,
           ),
           child: Center(
             child: Text(
               label,
               style: TextStyle(
-                color: isSelected ? Colors.white : AppColors.textSecondary,
+                color: isSelected ? Colors.white : AppColors.lightTextSecondary,
                 fontSize: 14,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
               ),
@@ -225,74 +293,92 @@ class _SetupScreenState extends State<SetupScreen> {
       children: [
         TextField(
           controller: _searchController,
+          style: const TextStyle(color: AppColors.lightTextPrimary),
           decoration: InputDecoration(
             labelText: '交易品种',
-            prefixIcon: const Icon(Icons.search, color: AppColors.textMuted),
+            labelStyle: const TextStyle(color: AppColors.lightTextSecondary),
+            filled: true,
+            fillColor: Colors.white,
+            prefixIcon: const Icon(Icons.search, color: AppColors.lightTextMuted),
             suffixIcon: _allData.isEmpty
                 ? IconButton(
-                    icon: const Icon(Icons.folder_open, color: AppColors.textMuted),
-                    onPressed: _pickFile,
-                    tooltip: '选择CSV数据文件',
+                    icon: const Icon(Icons.close, color: AppColors.lightTextMuted),
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() => _instrumentCode = '');
+                    },
                   )
                 : const Icon(Icons.check_circle, color: AppColors.success),
-            hintText: '输入品种代码后选择文件',
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.lightBorder),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.lightBorder),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.primary, width: 2),
+            ),
           ),
           onChanged: (v) => setState(() => _instrumentCode = v),
         ),
         const SizedBox(height: 8),
-        if (_selectedFileName != null && _allData.isEmpty)
+
+        // 显示缓存文件列表 (当未选择文件时)
+        if (_allData.isEmpty)
+          _buildCachedFileList(),
+
+        if (_selectedFileName != null && _allData.isEmpty && _isLoading)
           _buildLoadingIndicator()
         else if (_selectedFileName == null && _allData.isEmpty)
-          InkWell(
-            onTap: _pickFile,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppColors.bgSurface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.primary.withOpacity(0.3)),
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.cloud_upload_outlined, color: AppColors.primary, size: 20),
-                  SizedBox(width: 8),
-                  Text('点击选择 CSV 数据文件', style: TextStyle(color: AppColors.primary, fontSize: 14)),
-                ],
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: InkWell(
+              onTap: _pickFile,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.05),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.cloud_upload_outlined, color: AppColors.primary, size: 20),
+                    const SizedBox(width: 8),
+                    const Text('或 点击选择本地 CSV 文件',
+                        style: TextStyle(color: AppColors.primary, fontSize: 14)),
+                  ],
+                ),
               ),
             ),
           ),
         if (_allData.isNotEmpty)
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.1),
+              color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+              border: Border.all(color: AppColors.primary, width: 1.5),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.bar_chart, color: AppColors.primary, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _instrumentCode.isNotEmpty ? _instrumentCode : _selectedFileName ?? '',
-                        style: const TextStyle(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${DateFormat('yyyy.MM.dd HH:mm').format(_allData.first.time)} - ${DateFormat('yyyy.MM.dd HH:mm').format(_allData.last.time)}',
-                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                      ),
-                    ],
+                Text(
+                  _selectedPeriod.code,
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
                   ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${DateFormat('yyyy.MM.dd HH:mm').format(_allData.first.time)} - ${DateFormat('yyyy.MM.dd HH:mm').format(_allData.last.time)}',
+                  style: const TextStyle(color: AppColors.lightTextSecondary, fontSize: 13),
                 ),
               ],
             ),
@@ -306,14 +392,74 @@ class _SetupScreenState extends State<SetupScreen> {
     );
   }
 
+  Widget _buildCachedFileList() {
+    if (_cachedFiles.isEmpty) return const SizedBox.shrink();
+    
+    final query = _instrumentCode.trim().toUpperCase();
+    final matches = _cachedFiles.where((f) {
+      final name = f.path.split(Platform.pathSeparator).last.toUpperCase();
+      return name.contains(query);
+    }).toList();
+    
+    // 如果有搜索词但无匹配，不显示列表（让用户点击选择文件）
+    if (matches.isEmpty && query.isNotEmpty) return const SizedBox.shrink();
+
+    final displayList = matches.isEmpty && query.isEmpty ? _cachedFiles : matches;
+    if (displayList.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.lightBorder),
+        boxShadow: [
+           BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: ListView.separated(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: displayList.length,
+        separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
+        itemBuilder: (context, index) {
+          final file = displayList[index];
+          final filename = file.path.split(Platform.pathSeparator).last;
+          final name = filename.replaceAll('.csv', '');
+          
+          return ListTile(
+            dense: true,
+            leading: const Icon(Icons.show_chart, color: AppColors.primary, size: 20),
+            title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.lightTextMuted),
+            onTap: () {
+              setState(() {
+                _selectedFilePath = file.path;
+                _selectedFileName = filename;
+                _instrumentCode = name.toUpperCase();
+                _searchController.text = _instrumentCode;
+                _isLoading = true;
+                _error = null;
+              });
+              // Hide keyboard
+              FocusScope.of(context).unfocus();
+              _loadData(file.path);
+            },
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildLoadingIndicator() {
     return const Padding(
       padding: EdgeInsets.only(top: 8),
       child: Row(
         children: [
-          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
           SizedBox(width: 10),
-          Text('加载数据中...', style: TextStyle(color: AppColors.textSecondary)),
+          Text('加载数据中...', style: TextStyle(color: AppColors.lightTextSecondary)),
         ],
       ),
     );
@@ -323,7 +469,7 @@ class _SetupScreenState extends State<SetupScreen> {
     return Text(
       text,
       style: const TextStyle(
-        color: AppColors.textPrimary,
+        color: AppColors.lightTextPrimary,
         fontSize: 15,
         fontWeight: FontWeight.w600,
       ),
@@ -333,9 +479,9 @@ class _SetupScreenState extends State<SetupScreen> {
   Widget _buildPeriodSelector() {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.bgSurface,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderLight),
+        border: Border.all(color: AppColors.lightBorder),
       ),
       child: Column(
         children: Period.values.map((p) {
@@ -345,11 +491,11 @@ class _SetupScreenState extends State<SetupScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                color: isSelected ? AppColors.primary.withOpacity(0.1) : Colors.transparent,
+                color: isSelected ? AppColors.primary.withOpacity(0.06) : Colors.transparent,
                 border: isSelected
                     ? Border.all(color: AppColors.primary, width: 1.5)
                     : p != Period.values.last
-                        ? const Border(bottom: BorderSide(color: AppColors.border, width: 0.5))
+                        ? const Border(bottom: BorderSide(color: AppColors.lightDivider, width: 0.5))
                         : null,
                 borderRadius: isSelected ? BorderRadius.circular(12) : null,
               ),
@@ -358,7 +504,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   Text(
                     p.label,
                     style: TextStyle(
-                      color: isSelected ? AppColors.primary : AppColors.textPrimary,
+                      color: isSelected ? AppColors.primary : AppColors.lightTextPrimary,
                       fontSize: 16,
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
@@ -389,7 +535,6 @@ class _SetupScreenState extends State<SetupScreen> {
                 lastDate: end,
               );
               if (picked != null) {
-                // 同时选择时间
                 final time = await showTimePicker(
                   context: context,
                   initialTime: TimeOfDay.fromDateTime(_selectedDate ?? end),
@@ -409,25 +554,25 @@ class _SetupScreenState extends State<SetupScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: AppColors.bgSurface,
+          color: Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.borderLight),
+          border: Border.all(color: AppColors.lightBorder),
         ),
         child: Row(
           children: [
-            const Icon(Icons.access_time, color: AppColors.textMuted, size: 20),
+            Icon(Icons.access_time, color: AppColors.lightTextMuted, size: 20),
             const SizedBox(width: 12),
             Text(
               _selectedDate != null
                   ? DateFormat('yyyy-MM-dd HH:mm').format(_selectedDate!)
                   : '选择起始时间',
-              style: const TextStyle(
-                color: AppColors.textPrimary,
+              style: TextStyle(
+                color: AppColors.lightTextPrimary,
                 fontSize: 15,
               ),
             ),
             const Spacer(),
-            const Icon(Icons.arrow_drop_down, color: AppColors.textMuted),
+            Icon(Icons.arrow_drop_down, color: AppColors.lightTextMuted),
           ],
         ),
       ),
@@ -438,8 +583,23 @@ class _SetupScreenState extends State<SetupScreen> {
     return TextField(
       controller: _countController,
       keyboardType: TextInputType.number,
-      decoration: const InputDecoration(
+      style: const TextStyle(color: AppColors.lightTextPrimary),
+      decoration: InputDecoration(
         hintText: '输入K线根数',
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.lightBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.lightBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.primary, width: 2),
+        ),
       ),
       onChanged: (v) {
         final parsed = int.tryParse(v);
@@ -473,16 +633,16 @@ class _SetupScreenState extends State<SetupScreen> {
               duration: const Duration(milliseconds: 200),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
               decoration: BoxDecoration(
-                color: isSelected ? AppColors.primary : Colors.transparent,
+                color: isSelected ? AppColors.primary : Colors.white,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: isSelected ? AppColors.primary : AppColors.borderLight,
+                  color: isSelected ? AppColors.primary : AppColors.lightBorder,
                 ),
               ),
               child: Text(
                 labels[i],
                 style: TextStyle(
-                  color: isSelected ? Colors.white : AppColors.textSecondary,
+                  color: isSelected ? Colors.white : AppColors.lightTextSecondary,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                   fontSize: 14,
                 ),
@@ -513,22 +673,22 @@ class _SetupScreenState extends State<SetupScreen> {
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 14),
           decoration: BoxDecoration(
-            color: isSelected ? AppColors.primary.withOpacity(0.1) : AppColors.bgSurface,
+            color: isSelected ? AppColors.primary.withOpacity(0.08) : Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: isSelected ? AppColors.primary : AppColors.borderLight,
+              color: isSelected ? AppColors.primary : AppColors.lightBorder,
               width: isSelected ? 1.5 : 1,
             ),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, color: isSelected ? AppColors.primary : AppColors.textMuted, size: 20),
+              Icon(icon, color: isSelected ? AppColors.primary : AppColors.lightTextMuted, size: 20),
               const SizedBox(width: 8),
               Text(
                 label,
                 style: TextStyle(
-                  color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                  color: isSelected ? AppColors.primary : AppColors.lightTextSecondary,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 ),
               ),
@@ -543,9 +703,9 @@ class _SetupScreenState extends State<SetupScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.bgSurface,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderLight),
+        border: Border.all(color: AppColors.lightBorder),
       ),
       child: Row(
         children: [
@@ -556,7 +716,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 const Text(
                   '启用止盈止损',
                   style: TextStyle(
-                    color: AppColors.textPrimary,
+                    color: AppColors.lightTextPrimary,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
@@ -565,7 +725,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 Text(
                   '多空合约模式 (高风险高收益)',
                   style: TextStyle(
-                    color: AppColors.textMuted,
+                    color: AppColors.lightTextMuted,
                     fontSize: 13,
                   ),
                 ),
@@ -590,14 +750,15 @@ class _SetupScreenState extends State<SetupScreen> {
             onPressed: () => Navigator.pop(context),
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
-              side: const BorderSide(color: AppColors.borderLight),
+              side: BorderSide(color: AppColors.lightBorder),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
+              backgroundColor: Colors.white,
             ),
-            child: const Text(
+            child: Text(
               '取消',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 16),
+              style: TextStyle(color: AppColors.lightTextSecondary, fontSize: 16),
             ),
           ),
         ),
@@ -609,11 +770,14 @@ class _SetupScreenState extends State<SetupScreen> {
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
               backgroundColor: AppColors.primary,
-              disabledBackgroundColor: AppColors.bgSurface,
+              disabledBackgroundColor: AppColors.lightBorder,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
             child: Text(
               _allData.isEmpty ? '请先选择数据' : '开始训练',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
             ),
           ),
         ),
@@ -633,7 +797,6 @@ class _SetupScreenState extends State<SetupScreen> {
     if (_sessionLength > 0) {
       limit = _sessionLength;
     }
-    // -1 means MAX (no limit)
 
     final bool isSpotOnly = widget.trainingType == TrainingType.spotReplay ||
         widget.trainingType == TrainingType.spotRandom ||
@@ -642,13 +805,17 @@ class _SetupScreenState extends State<SetupScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => MainScreen(
-          allData: _allData,
-          startIndex: startIndex,
-          limit: limit,
-          instrumentCode: _instrumentCode,
-          initialPeriod: _selectedPeriod,
-          spotOnly: isSpotOnly,
+        builder: (_) => Theme(
+          data: AppTheme.darkTheme,
+          child: MainScreen(
+            allData: _allData,
+            startIndex: startIndex,
+            limit: limit,
+            instrumentCode: _instrumentCode,
+            initialPeriod: _selectedPeriod,
+            spotOnly: isSpotOnly,
+            csvPath: _selectedFilePath,
+          ),
         ),
       ),
     );

@@ -12,9 +12,12 @@ import '../chart/sub_chart_painter.dart';
 import '../chart/chart_view_controller.dart';
 import '../theme/app_theme.dart';
 import '../../models/trade_model.dart';
+import '../../models/trade_record.dart';
 import '../../services/account_service.dart';
 import 'package:intl/intl.dart';
 import '../widgets/order_panel.dart';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 
 /// 副图指标类型
 enum SubIndicatorType { vol, macd, kdj, rsi, wr }
@@ -26,6 +29,7 @@ class MainScreen extends StatefulWidget {
   final String instrumentCode;
   final Period initialPeriod;
   final bool spotOnly;
+  final String? csvPath;  // 原始CSV路径
 
   const MainScreen({
     Key? key,
@@ -35,6 +39,7 @@ class MainScreen extends StatefulWidget {
     this.instrumentCode = 'RB',
     this.initialPeriod = Period.m5,
     this.spotOnly = false,
+    this.csvPath,
   }) : super(key: key);
 
   @override
@@ -105,9 +110,85 @@ class _MainScreenState extends State<MainScreen> {
         sessionTradeCount: sessionTradeCount,
         sessionWinCount: sessionWinCount,
       );
+
+      // 捕获此会话的完整数据用于缓存（以便回看时能看到后续走势）
+      final sessionData = widget.allData; 
+      
+      // 异步缓存K线数据并持久化交易记录
+      // 注意：这里传入的是全量数据，而不是 replayEngine.displayKlines，确保回看时有完整数据
+      _cacheKlineAndSaveTrades(accountService, closedTrades, sessionData);
     } catch (_) {
       // context may not be available in dispose
     }
+  }
+
+  /// 缓存K线数据到本地文件并保存交易记录
+  Future<void> _cacheKlineAndSaveTrades(
+    AccountService accountService,
+    List<Trade> closedTrades,
+    List<KlineModel> klinesToCache,
+  ) async {
+    String? cachedPath;
+
+    try {
+      // 获取缓存目录
+      final dir = await getApplicationSupportDirectory();
+      final cacheDir = Directory('${dir.path}/kline_cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+
+      // 将K线数据保存为CSV
+    if (klinesToCache.isNotEmpty) {
+      final now = DateTime.now();
+      final timestamp = DateFormat('yyyyMMdd_HHmmss').format(now);
+      // Sanitize instrument code to remove invalid filename characters
+      final safeCode = widget.instrumentCode.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+      final fileName = '${safeCode}_$timestamp.csv';
+      final file = File('${cacheDir.path}/$fileName');
+
+      final buffer = StringBuffer();
+        // 写入CSV头部（可选，但为了解析方便还是保持无头或标准头，这里保持无头与解析逻辑一致）
+        // 格式: 2023-10-27 09:00:00,open,high,low,close,volume
+        for (final k in klinesToCache) {
+          buffer.writeln(
+            '${DateFormat('yyyy-MM-dd HH:mm:ss').format(k.time)},'
+            '${k.open},${k.high},${k.low},${k.close},${k.volume}',
+          );
+        }
+        await file.writeAsString(buffer.toString());
+        cachedPath = file.path;
+      }
+    } catch (e) {
+      debugPrint('缓存K线数据失败: $e');
+    }
+
+    // 保存交易记录
+    final now = DateTime.now();
+    // 确定可见K线数量：如果是回看，默认显示到当前交易结束的时间点，或者整个session长度
+    // 这里使用 _replayEngine.displayKlines.length 可能会有问题因为 engine 已销毁
+    // 我们保存 closedTrades 时，每个 trade 都有 closeTime
+    // 回看页面会根据 trade 自动定位
+    
+    final records = closedTrades.map((t) => TradeRecord(
+      id: t.id,
+      instrumentCode: widget.instrumentCode,
+      direction: t.direction == Direction.long ? 'long' : 'short',
+      type: widget.spotOnly ? 'spot' : 'futures',
+      entryPrice: t.entryPrice,
+      closePrice: t.closePrice!,
+      quantity: t.quantity,
+      leverage: t.leverage,
+      pnl: t.realizedPnL,
+      fee: 0,
+      entryTime: t.entryTime,
+      closeTime: t.closeTime!,
+      trainingTime: now,
+      csvPath: cachedPath ?? widget.csvPath, // 优先使用缓存，失败则尝试使用原始路径
+      startIndex: 0,
+      visibleBars: null, // 让回看页面自动计算
+    )).toList();
+    accountService.addTradeRecords(records);
   }
 
   void _onReplayUpdate() {

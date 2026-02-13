@@ -3,6 +3,9 @@ import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../../services/account_service.dart';
 import 'setup_screen.dart';
+import 'position_calculator_screen.dart';
+import 'settings_screen.dart';
+import 'trade_history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -14,11 +17,29 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
 
+  // 主题自适应色彩辅助
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+  Color get _cardBg => _isDark ? AppColors.bgCard : Colors.white;
+  Color get _textPrimary => _isDark ? AppColors.textPrimary : AppColors.lightTextPrimary;
+  Color get _textSecondary => _isDark ? AppColors.textSecondary : AppColors.lightTextSecondary;
+  Color get _textMuted => _isDark ? AppColors.textMuted : AppColors.lightTextMuted;
+  Color get _dividerClr => _isDark ? AppColors.border : AppColors.lightDivider;
+  Color get _borderClr => _isDark ? AppColors.borderLight : AppColors.lightBorder;
+  Color get _surfaceClr => _isDark ? AppColors.bgSurface : AppColors.lightSurface;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: _currentIndex == 0 ? _buildHomePage() : _buildPlaceholder(),
+        child: IndexedStack(
+          index: _currentIndex,
+          children: [
+            _buildHomePage(),
+            _buildPlaceholder('行情'),
+            _buildPlaceholder('交易所'),
+            const SettingsScreen(),
+          ],
+        ),
       ),
       bottomNavigationBar: _buildBottomNav(),
     );
@@ -28,37 +49,52 @@ class _HomeScreenState extends State<HomeScreen> {
     return Consumer<AccountService>(
       builder: (context, account, _) {
         return SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          physics: const BouncingScrollPhysics(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 12),
+              // 顶部统计卡片
               _buildStatsCard(account),
-              const SizedBox(height: 32),
-              _buildSectionTitle(),
-              const SizedBox(height: 20),
-              _buildTrainingModeCard(
-                title: '现货训练 (只做多)',
-                icon: Icons.trending_up,
-                iconColor: AppColors.success,
-                modes: [
-                  _TrainingMode('复盘模式', Icons.replay_circle_filled, TrainingType.spotReplay),
-                  _TrainingMode('随机训练', Icons.shuffle, TrainingType.spotRandom),
-                  _TrainingMode('裸K训练', Icons.candlestick_chart, TrainingType.spotNakedK),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _buildTrainingModeCard(
-                title: '合约训练 (多空杠杆)',
-                icon: Icons.swap_vert,
-                iconColor: AppColors.primary,
-                modes: [
-                  _TrainingMode('复盘模式', Icons.replay_circle_filled, TrainingType.futuresReplay),
-                  _TrainingMode('随机训练', Icons.shuffle, TrainingType.futuresRandom),
-                  _TrainingMode('裸K训练', Icons.candlestick_chart, TrainingType.futuresNakedK),
-                ],
-              ),
               const SizedBox(height: 24),
+              // K线训练营标题
+              _buildSectionTitle(),
+              const SizedBox(height: 16),
+              // 训练模式卡片
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildTrainingModeCard(
+                      title: '现货训练 (只做多)',
+                      icon: Icons.trending_up,
+                      iconColor: AppColors.success,
+                      headerBg: _isDark ? const Color(0xFF0C2E1F) : AppColors.spotHeaderBg,
+                      modes: [
+                        _TrainingMode('复盘模式', Icons.replay_circle_filled, TrainingType.spotReplay),
+                        _TrainingMode('随机训练', Icons.shuffle, TrainingType.spotRandom),
+                        _TrainingMode('裸K训练', Icons.candlestick_chart, TrainingType.spotNakedK),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _buildTrainingModeCard(
+                      title: '合约训练 (多空杠杆)',
+                      icon: Icons.swap_vert,
+                      iconColor: AppColors.primary,
+                      headerBg: _isDark ? const Color(0xFF0F1A2E) : AppColors.futuresHeaderBg,
+                      modes: [
+                        _TrainingMode('复盘模式', Icons.replay_circle_filled, TrainingType.futuresReplay),
+                        _TrainingMode('随机训练', Icons.shuffle, TrainingType.futuresRandom),
+                        _TrainingMode('裸K训练', Icons.candlestick_chart, TrainingType.futuresNakedK),
+                      ],
+                    ),
+                    const SizedBox(height: 28),
+                    // 常用工具
+                    _buildToolsSection(),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
             ],
           ),
         );
@@ -68,24 +104,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildStatsCard(AccountService account) {
     return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF1A2332),
-            Color(0xFF111827),
-          ],
-        ),
+        color: _cardBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.border, width: 1),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
+            color: Colors.black.withOpacity(_isDark ? 0.2 : 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
         ],
+        border: _isDark ? Border.all(color: AppColors.borderLight, width: 0.5) : null,
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -98,85 +128,74 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text(
+                      Text(
                         '账户余额',
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 13,
-                        ),
+                        style: TextStyle(color: _textSecondary, fontSize: 13),
                       ),
                       const SizedBox(height: 8),
-                      Text(
-                        account.balance.toStringAsFixed(2),
-                        style: const TextStyle(
-                          color: AppColors.textPrimary,
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        '金币',
-                        style: TextStyle(
-                          color: AppColors.textMuted,
-                          fontSize: 12,
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            account.balance.toStringAsFixed(2),
+                            style: TextStyle(
+                              color: _textPrimary,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text('金币', style: TextStyle(color: _textMuted, fontSize: 12)),
+                        ],
                       ),
                     ],
                   ),
                 ),
-                Container(
-                  height: 60,
-                  width: 1,
-                  color: AppColors.border,
-                ),
+                Container(height: 50, width: 1, color: _dividerClr),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text(
-                        '盈亏',
-                        style: TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 13,
-                        ),
-                      ),
+                      Text('盈亏', style: TextStyle(color: _textSecondary, fontSize: 13)),
                       const SizedBox(height: 8),
-                      Text(
-                        account.totalPnL.toStringAsFixed(2),
-                        style: TextStyle(
-                          color: account.totalPnL >= 0 ? AppColors.bullish : AppColors.bearish,
-                          fontSize: 26,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        '金币',
-                        style: TextStyle(
-                          color: AppColors.textMuted,
-                          fontSize: 12,
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text(
+                            account.totalPnL.toStringAsFixed(2),
+                            style: TextStyle(
+                              color: account.totalPnL >= 0 ? AppColors.bullish : AppColors.bearish,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text('金币', style: TextStyle(color: _textMuted, fontSize: 12)),
+                        ],
                       ),
                     ],
                   ),
                 ),
               ],
             ),
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Divider(color: AppColors.border, height: 1),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Divider(color: _dividerClr, height: 1),
             ),
             // 下半部分：统计数据
             Row(
               children: [
-                _buildStatItem('交易次数', '${account.tradeCount}', AppColors.textPrimary),
+                _buildStatItem('交易次数', '${account.tradeCount}', _textPrimary),
                 _buildStatItem('收益率', '${account.roi.toStringAsFixed(2)}%',
                     account.roi >= 0 ? AppColors.bullish : AppColors.bearish),
                 _buildStatItem('胜率', '${account.winRate.toStringAsFixed(2)}%',
-                    account.winRate >= 50 ? AppColors.bullish : AppColors.textSecondary),
+                    account.winRate >= 50 ? AppColors.success : _textSecondary),
               ],
             ),
           ],
@@ -189,21 +208,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return Expanded(
       child: Column(
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 13,
-            ),
-          ),
+          Text(label, style: TextStyle(color: _textSecondary, fontSize: 13)),
           const SizedBox(height: 8),
           Text(
             value,
-            style: TextStyle(
-              color: valueColor,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(color: valueColor, fontSize: 20, fontWeight: FontWeight.bold),
           ),
         ],
       ),
@@ -220,49 +229,44 @@ class _HomeScreenState extends State<HomeScreen> {
             ).createShader(bounds),
             child: const Text(
               'K线训练营',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
             ),
           ),
         ),
         const SizedBox(height: 6),
-        const Center(
+        Center(
           child: Text(
             '提升您的交易技能与市场洞察力',
-            style: TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 13,
-            ),
+            style: TextStyle(color: _textSecondary, fontSize: 13),
           ),
         ),
-        const SizedBox(height: 20),
-        Row(
-          children: [
-            const Expanded(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '训练模式',
-                  style: TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '训练模式',
+                    style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
-            ),
-            // 重置按钮
-            GestureDetector(
-              onTap: () => _showResetDialog(),
-              child: const Text(
-                '重置账户',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+              GestureDetector(
+                onTap: () => _showResetDialog(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _isDark ? AppColors.bgSurface : AppColors.lightBorder,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text('重置账户', style: TextStyle(color: _textMuted, fontSize: 12)),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ],
     );
@@ -272,14 +276,15 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.bgCard,
-        title: const Text('重置账户', style: TextStyle(color: AppColors.textPrimary)),
-        content: const Text('确定要重置所有训练数据吗？此操作不可恢复。',
-            style: TextStyle(color: AppColors.textSecondary)),
+        backgroundColor: _cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('重置账户', style: TextStyle(color: _textPrimary)),
+        content: Text('确定要重置所有训练数据吗？此操作不可恢复。',
+            style: TextStyle(color: _textSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消', style: TextStyle(color: AppColors.textMuted)),
+            child: Text('取消', style: TextStyle(color: _textMuted)),
           ),
           TextButton(
             onPressed: () {
@@ -297,47 +302,58 @@ class _HomeScreenState extends State<HomeScreen> {
     required String title,
     required IconData icon,
     required Color iconColor,
+    required Color headerBg,
     required List<_TrainingMode> modes,
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.bgCard,
+        color: _cardBg,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(_isDark ? 0.15 : 0.03),
+            blurRadius: 12,
+            offset: const Offset(0, 2),
+          ),
+        ],
+        border: _isDark ? Border.all(color: AppColors.borderLight, width: 0.5) : null,
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: Column(
+        children: [
+          // 标题区 — 带浅色背景
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+            decoration: BoxDecoration(
+              color: headerBg,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            child: Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
                     color: iconColor.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(icon, color: iconColor, size: 20),
+                  child: Icon(icon, color: iconColor, size: 18),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Text(
                   title,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(color: _textPrimary, fontSize: 15, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
-            Row(
+          ),
+          // 按钮区
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+            child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: modes.map((m) => _buildModeButton(m)).toList(),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -352,25 +368,88 @@ class _HomeScreenState extends State<HomeScreen> {
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              color: AppColors.bgSurface,
+              color: _surfaceClr,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.borderLight, width: 1),
             ),
-            child: Icon(
-              mode.icon,
-              color: AppColors.textSecondary,
-              size: 26,
-            ),
+            child: Icon(mode.icon, color: _textPrimary, size: 26),
           ),
           const SizedBox(height: 8),
-          Text(
-            mode.label,
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 12,
-            ),
-          ),
+          Text(mode.label, style: TextStyle(color: _textSecondary, fontSize: 12)),
         ],
+      ),
+    );
+  }
+
+  // ===== 常用工具 =====
+  Widget _buildToolsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '常用工具',
+          style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _buildToolCard(Icons.folder_open, '从存档开始', const Color(0xFFFF6B35)),
+            _buildToolCard(Icons.history, '历史记录', const Color(0xFF6B7280), onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TradeHistoryScreen()),
+              );
+            }),
+            _buildToolCard(Icons.school, '新手教程', AppColors.success),
+            _buildToolCard(Icons.security, 'TOTP验证器', const Color(0xFF3B3F8C)),
+            _buildToolCard(Icons.calculate, '仓位计算', AppColors.primary, onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PositionCalculatorScreen()),
+              );
+            }),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToolCard(IconData icon, String label, Color iconColor, {VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: (MediaQuery.of(context).size.width - 56) / 2,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: _cardBg,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(_isDark ? 0.15 : 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 2),
+            ),
+          ],
+          border: _isDark ? Border.all(color: AppColors.borderLight, width: 0.5) : null,
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: iconColor, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: TextStyle(color: _textPrimary, fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -378,52 +457,45 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onModeSelected(TrainingType type) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => SetupScreen(trainingType: type),
-      ),
+      MaterialPageRoute(builder: (_) => SetupScreen(trainingType: type)),
     );
   }
 
   Widget _buildBottomNav() {
     return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bgCard,
-        border: Border(
-          top: BorderSide(color: AppColors.border, width: 1),
-        ),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(_isDark ? 0.2 : 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
       ),
       child: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (i) => setState(() => _currentIndex = i),
+        backgroundColor: _cardBg,
+        selectedItemColor: AppColors.primary,
+        unselectedItemColor: _textMuted,
+        type: BottomNavigationBarType.fixed,
+        elevation: 0,
+        selectedFontSize: 12,
+        unselectedFontSize: 12,
         items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home_rounded),
-            label: '首页',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.show_chart),
-            label: '行情',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_balance),
-            label: '交易所',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: '设置',
-          ),
+          BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: '首页'),
+          BottomNavigationBarItem(icon: Icon(Icons.show_chart), label: '行情'),
+          BottomNavigationBarItem(icon: Icon(Icons.account_balance), label: '交易所'),
+          BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
         ],
       ),
     );
   }
 
-  Widget _buildPlaceholder() {
-    const labels = ['', '行情', '交易所', '设置'];
+  Widget _buildPlaceholder(String label) {
     return Center(
-      child: Text(
-        '${labels[_currentIndex]} - 开发中',
-        style: const TextStyle(color: AppColors.textSecondary, fontSize: 18),
-      ),
+      child: Text('$label - 开发中', style: TextStyle(color: _textSecondary, fontSize: 18)),
     );
   }
 }

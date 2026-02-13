@@ -253,44 +253,91 @@ class KlinePainter extends CustomPainter {
   }
 
   void _drawTradeMarkers(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY, double chartHeight) {
+    if (endIdx > allData.length) endIdx = allData.length;
 
     for (var trade in allTrades) {
-      final entryDataIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isAfter(trade.entryTime));
-      if (entryDataIdx >= startIdx && entryDataIdx < endIdx) {
-        final visibleIdx = entryDataIdx - startIdx;
+      // 1. Draw Entry Marker
+      final entryIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isAfter(trade.entryTime));
+      
+      if (entryIdx >= startIdx && entryIdx < endIdx) {
+        final kline = allData[entryIdx];
+        final visibleIdx = entryIdx - startIdx;
         final x = visibleIdx * step + step / 2;
-        final y = getY(trade.entryPrice);
-        final color = trade.direction == Direction.long ? AppColors.bullish : AppColors.bearish;
-
-        _markerPaint.color = color;
-        final path = Path();
-        if (trade.direction == Direction.long) {
-          path.moveTo(x, y + 12);
-          path.lineTo(x - 5, y + 20);
-          path.lineTo(x + 5, y + 20);
-        } else {
-          path.moveTo(x, y - 12);
-          path.lineTo(x - 5, y - 20);
-          path.lineTo(x + 5, y - 20);
-        }
-        path.close();
-        canvas.drawPath(path, _markerPaint);
+        
+        // Long Entry = BUY, Short Entry = SELL
+        final isBuy = trade.direction == Direction.long;
+        final y = isBuy ? getY(kline.low) : getY(kline.high);
+        
+        _drawMarkerBadge(canvas, x, y, isBuy, isBuy ? "BUY" : "SELL", true);
       }
 
+      // 2. Draw Exit Marker
       if (!trade.isOpen && trade.closeTime != null) {
-        final closeDataIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime!) || k.time.isAfter(trade.closeTime!));
-        if (closeDataIdx >= startIdx && closeDataIdx < endIdx) {
-          final visibleIdx = closeDataIdx - startIdx;
-          final x = visibleIdx * step + step / 2;
-          final y = getY(trade.closePrice!);
-
-          _markerPaint.color = Colors.white70;
-          canvas.drawCircle(Offset(x, y), 4, _markerPaint);
-          final borderPaint = Paint()..color = trade.realizedPnL >= 0 ? AppColors.bullish : AppColors.bearish..strokeWidth = 1.5..style = PaintingStyle.stroke;
-          canvas.drawCircle(Offset(x, y), 4, borderPaint);
+        final closeIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime!) || k.time.isAfter(trade.closeTime!));
+        
+        if (closeIdx >= startIdx && closeIdx < endIdx) {
+           final kline = allData[closeIdx];
+           final visibleIdx = closeIdx - startIdx;
+           final x = visibleIdx * step + step / 2;
+           
+           // Long Exit = SELL, Short Exit = BUY
+           final isBuy = trade.direction != Direction.long;
+           final y = isBuy ? getY(kline.low) : getY(kline.high);
+           
+           _drawMarkerBadge(canvas, x, y, isBuy, isBuy ? "BUY" : "SELL", false);
         }
       }
     }
+  }
+
+  void _drawMarkerBadge(Canvas canvas, double x, double y, bool isBuy, String text, bool isEntry) {
+    final color = isBuy ? AppColors.bullish : AppColors.bearish;
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final padding = 4.0;
+    final w = tp.width + padding * 2;
+    final h = tp.height + padding * 2;
+    
+    // Offset from candle
+    final defaultOffset = 15.0; 
+    
+    // If Buy, draw below (y + offset). If Sell, draw above (y - offset - h).
+    final double badgeTop = isBuy ? (y + defaultOffset) : (y - defaultOffset - h);
+    final double badgeLeft = x - w / 2;
+    
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(badgeLeft, badgeTop, w, h), 
+      const Radius.circular(4)
+    );
+
+    final bgPaint = Paint()..color = color..style = PaintingStyle.fill;
+    
+    // Draw connecting line/pointer
+    final linePath = Path();
+    if (isBuy) {
+       // Pointing Up to candle low
+       linePath.moveTo(x, y + 2); // Start near candle
+       linePath.lineTo(x, badgeTop); // End at badge top
+    } else {
+       // Pointing Down to candle high
+       linePath.moveTo(x, y - 2); // Start near candle
+       linePath.lineTo(x, badgeTop + h); // End at badge bottom
+    }
+    canvas.drawPath(linePath, Paint()..color = color..strokeWidth = 1.0..style = PaintingStyle.stroke);
+
+    // Draw Badge
+    canvas.drawRRect(rrect, bgPaint);
+    tp.paint(canvas, Offset(badgeLeft + padding, badgeTop + padding));
+    
+    // Draw Entry/Exit circle at the actual price point? 
+    // Maybe just a small dot on the candle key price
+    // But text badge is the main thing user requested.
   }
 
   void _drawPriceAxis(Canvas canvas, Size size, double plotWidth, double top, double bottom, double range, double Function(double) getY) {
