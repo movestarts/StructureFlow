@@ -11,6 +11,7 @@ class Trade {
   final double entryPrice;
   final Direction direction;
   final double quantity; // Lots
+  final int leverage;
   
   // For simplicity, we track closed status
   final bool isOpen;
@@ -23,6 +24,7 @@ class Trade {
     required this.entryPrice,
     required this.direction,
     required this.quantity,
+    this.leverage = 1,
     this.isOpen = true,
     this.closePrice,
     this.closeTime,
@@ -35,18 +37,20 @@ class Trade {
       entryPrice: entryPrice,
       direction: direction,
       quantity: quantity,
+      leverage: leverage,
       isOpen: false,
       closePrice: price,
       closeTime: time,
     );
   }
 
+  /// PnL 计算考虑杠杆
   double calculatePnL(double currentPrice) {
     final exitPrice = isOpen ? currentPrice : (closePrice ?? currentPrice);
     if (direction == Direction.long) {
-      return (exitPrice - entryPrice) * quantity; 
+      return (exitPrice - entryPrice) * quantity * leverage; 
     } else {
-      return (entryPrice - exitPrice) * quantity;
+      return (entryPrice - exitPrice) * quantity * leverage;
     }
   }
   
@@ -54,4 +58,7 @@ class Trade {
     if (isOpen) return 0;
     return calculatePnL(closePrice!);
   }
+
+  /// 已占用保证金
+  double get usedMargin => (entryPrice * quantity) / leverage;
 }

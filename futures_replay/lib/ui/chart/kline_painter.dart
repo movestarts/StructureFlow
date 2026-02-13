@@ -1,262 +1,204 @@
 import 'package:flutter/material.dart';
 import '../../models/kline_model.dart';
 import '../../models/trade_model.dart';
+import '../../services/indicator_service.dart';
+import '../../ui/theme/app_theme.dart';
 import 'chart_view_controller.dart';
+
+/// 主图指标类型
+enum MainIndicatorType { ma, ema, boll }
 
 class KlinePainter extends CustomPainter {
   final List<KlineModel> allData;
   final List<Trade> allTrades;
   final ChartViewController viewController;
   final double currentPrice;
-  
+
   // 均线数据
+  final List<double?> ma5;
   final List<double?> ma10;
   final List<double?> ma20;
-  final bool showMA;
+
+  // BOLL数据
+  final BOLLResult? bollData;
+
+  // 显示控制
+  final MainIndicatorType mainIndicator;
 
   final Paint _wickPaint = Paint()..strokeWidth = 1.0;
   final Paint _candlePaint = Paint()..style = PaintingStyle.fill;
-  final Paint _volumePaint = Paint()..style = PaintingStyle.fill;
-  final Paint _linePaint = Paint()..strokeWidth = 1.5..style = PaintingStyle.stroke;
-  final Paint _gridPaint = Paint()..color = Colors.white10..strokeWidth = 0.5;
+  final Paint _linePaint = Paint()..strokeWidth = 1.0..style = PaintingStyle.stroke;
+  final Paint _gridPaint = Paint()..color = AppColors.grid..strokeWidth = 0.5;
   final Paint _markerPaint = Paint()..style = PaintingStyle.fill;
-  final Paint _ma10Paint = Paint()..color = Colors.yellow..strokeWidth = 1.0..style = PaintingStyle.stroke;
-  final Paint _ma20Paint = Paint()..color = Colors.cyan..strokeWidth = 1.0..style = PaintingStyle.stroke;
+  final Paint _priceLabelBgPaint = Paint()..style = PaintingStyle.fill;
 
-  final Color upColor = const Color(0xFFEF5350);
-  final Color downColor = const Color(0xFF26A69A);
-  
   KlinePainter({
     required this.allData,
     required this.allTrades,
     required this.viewController,
     required this.currentPrice,
+    this.ma5 = const [],
     this.ma10 = const [],
     this.ma20 = const [],
-    this.showMA = true,
+    this.bollData,
+    this.mainIndicator = MainIndicatorType.boll,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (allData.isEmpty) return;
 
-    final double plottingWidth = size.width - 60.0;
-    
+    final double priceAxisWidth = 60.0;
+    final double plottingWidth = size.width - priceAxisWidth;
+
     int startIdx = viewController.visibleStartIndex.clamp(0, allData.length);
     int endIdx = viewController.visibleEndIndex.clamp(0, allData.length);
-    
+
     if (startIdx >= endIdx || startIdx >= allData.length) return;
-    
+
     final visibleData = allData.sublist(startIdx, endIdx);
     if (visibleData.isEmpty) return;
 
+    // 计算价格范围
     double maxHigh = -double.infinity;
     double minLow = double.infinity;
-    double maxVol = -double.infinity;
 
     for (var k in visibleData) {
       if (k.high > maxHigh) maxHigh = k.high;
       if (k.low < minLow) minLow = k.low;
-      if (k.volume > maxVol) maxVol = k.volume;
     }
-    
-    // 考虑MA范围
-    if (showMA) {
-      for (int i = startIdx; i < endIdx && i < ma10.length; i++) {
-        if (ma10[i] != null) {
-          if (ma10[i]! > maxHigh) maxHigh = ma10[i]!;
-          if (ma10[i]! < minLow) minLow = ma10[i]!;
-        }
-      }
-      for (int i = startIdx; i < endIdx && i < ma20.length; i++) {
-        if (ma20[i] != null) {
-          if (ma20[i]! > maxHigh) maxHigh = ma20[i]!;
-          if (ma20[i]! < minLow) minLow = ma20[i]!;
-        }
-      }
+
+    // 考虑BOLL/MA范围
+    _expandRange(startIdx, endIdx, ma5, (v) { if (v > maxHigh) maxHigh = v; if (v < minLow) minLow = v; });
+    _expandRange(startIdx, endIdx, ma10, (v) { if (v > maxHigh) maxHigh = v; if (v < minLow) minLow = v; });
+    _expandRange(startIdx, endIdx, ma20, (v) { if (v > maxHigh) maxHigh = v; if (v < minLow) minLow = v; });
+    if (bollData != null) {
+      _expandRange(startIdx, endIdx, bollData!.upper, (v) { if (v > maxHigh) maxHigh = v; if (v < minLow) minLow = v; });
+      _expandRange(startIdx, endIdx, bollData!.lower, (v) { if (v > maxHigh) maxHigh = v; if (v < minLow) minLow = v; });
     }
-    
+
     final double priceRange = maxHigh - minLow;
-    final double margin = (priceRange == 0 ? 1 : priceRange) * 0.1;
+    final double margin = (priceRange == 0 ? 1 : priceRange) * 0.08;
     final double topPrice = maxHigh + margin;
     final double bottomPrice = minLow - margin;
     final double range = topPrice - bottomPrice;
 
-    final double chartHeight = size.height * 0.75;
-    final double volTop = size.height * 0.80;
-    final double volHeight = size.height - volTop;
+    final double chartHeight = size.height;
 
     double getY(double price) {
       return chartHeight - ((price - bottomPrice) / range) * chartHeight;
-    }
-    
-    double getVolY(double vol) {
-      return size.height - (vol / (maxVol == 0 ? 1 : maxVol)) * volHeight;
-    }
-
-    double? getXForTime(DateTime time) {
-      final idx = allData.indexWhere((k) => k.time.isAtSameMomentAs(time) || k.time.isAfter(time));
-      if (idx == -1 || idx < startIdx || idx >= endIdx) return null;
-      
-      final visibleIdx = idx - startIdx;
-      return visibleIdx * viewController.step + viewController.step / 2;
     }
 
     final candleWidth = viewController.candleWidth;
     final step = viewController.step;
 
-    // 绘制K线
+    // ===== 绘制网格 =====
+    _drawGrid(canvas, size, plottingWidth, topPrice, bottomPrice, range, getY);
+
+    // ===== 绘制BOLL =====
+    if (mainIndicator == MainIndicatorType.boll && bollData != null) {
+      _drawMALine(canvas, startIdx, endIdx, step, getY, bollData!.upper,
+          Paint()..color = AppColors.bollUp..strokeWidth = 1.0..style = PaintingStyle.stroke);
+      _drawMALine(canvas, startIdx, endIdx, step, getY, bollData!.middle,
+          Paint()..color = AppColors.bollMid..strokeWidth = 1.0..style = PaintingStyle.stroke);
+      _drawMALine(canvas, startIdx, endIdx, step, getY, bollData!.lower,
+          Paint()..color = AppColors.bollDn..strokeWidth = 1.0..style = PaintingStyle.stroke);
+    }
+
+    // ===== 绘制MA =====
+    if (mainIndicator == MainIndicatorType.ma || mainIndicator == MainIndicatorType.ema) {
+      if (ma5.isNotEmpty) {
+        _drawMALine(canvas, startIdx, endIdx, step, getY, ma5,
+            Paint()..color = AppColors.ma5..strokeWidth = 1.0..style = PaintingStyle.stroke);
+      }
+      if (ma10.isNotEmpty) {
+        _drawMALine(canvas, startIdx, endIdx, step, getY, ma10,
+            Paint()..color = AppColors.ma10..strokeWidth = 1.0..style = PaintingStyle.stroke);
+      }
+      if (ma20.isNotEmpty) {
+        _drawMALine(canvas, startIdx, endIdx, step, getY, ma20,
+            Paint()..color = AppColors.ma20..strokeWidth = 1.0..style = PaintingStyle.stroke);
+      }
+    }
+
+    // ===== 绘制K线 =====
     for (int i = 0; i < visibleData.length; i++) {
       final k = visibleData[i];
       final double x = i * step + step / 2;
-      
+
       final isUp = k.close >= k.open;
-      final color = isUp ? upColor : downColor;
-      
+      final color = isUp ? AppColors.bullish : AppColors.bearish;
+
       _wickPaint.color = color;
       _candlePaint.color = color;
-      
+
+      // 影线
       canvas.drawLine(Offset(x, getY(k.high)), Offset(x, getY(k.low)), _wickPaint);
-      
+
+      // 实体
       double openY = getY(k.open);
       double closeY = getY(k.close);
       if ((openY - closeY).abs() < 1) {
         closeY = openY + (isUp ? -1 : 1);
       }
-      
-      final rect = Rect.fromLTRB(x - candleWidth/2, openY, x + candleWidth/2, closeY);
-      canvas.drawRect(rect, _candlePaint);
-      
-      final volRect = Rect.fromLTRB(x - candleWidth/2, getVolY(k.volume), x + candleWidth/2, size.height);
-      _volumePaint.color = color.withOpacity(0.5);
-      canvas.drawRect(volRect, _volumePaint);
-    }
-    
-    // 绘制均线
-    if (showMA) {
-      _drawMA(canvas, startIdx, endIdx, step, getY, _ma10Paint, ma10);
-      _drawMA(canvas, startIdx, endIdx, step, getY, _ma20Paint, ma20);
-    }
-    
-    // 绘制价格轴
-    final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    final axisX = plottingWidth + 5.0;
-    
-    for (int i = 0; i <= 5; i++) {
-      double p = bottomPrice + (range / 5) * i;
-      double y = getY(p);
-      textPainter.text = TextSpan(
-        text: p.toStringAsFixed(1),
-        style: const TextStyle(color: Colors.grey, fontSize: 10),
-      );
-      textPainter.layout();
-      textPainter.paint(canvas, Offset(axisX, y - textPainter.height / 2));
-      canvas.drawLine(Offset(0, y), Offset(plottingWidth, y), _gridPaint);
+
+      final rect = Rect.fromLTRB(x - candleWidth / 2, openY.clamp(0, chartHeight), x + candleWidth / 2, closeY.clamp(0, chartHeight));
+      if (isUp) {
+        // 阳线：空心或实心（这里用实心）
+        canvas.drawRect(rect, _candlePaint);
+      } else {
+        canvas.drawRect(rect, _candlePaint);
+      }
     }
 
-    // 绘制交易标记
-    for (var trade in allTrades) {
-      final entryX = getXForTime(trade.entryTime);
-      if (entryX != null) {
-        final entryY = getY(trade.entryPrice);
-        final entryColor = trade.direction == Direction.long ? Colors.red : Colors.green;
-        
-        _markerPaint.color = entryColor;
-        final path = Path();
-        if (trade.direction == Direction.long) {
-          path.moveTo(entryX, entryY + 15);
-          path.lineTo(entryX - 6, entryY + 25);
-          path.lineTo(entryX + 6, entryY + 25);
-        } else {
-          path.moveTo(entryX, entryY - 15);
-          path.lineTo(entryX - 6, entryY - 25);
-          path.lineTo(entryX + 6, entryY - 25);
-        }
-        path.close();
-        canvas.drawPath(path, _markerPaint);
-        
-        textPainter.text = TextSpan(
-          text: trade.direction == Direction.long ? '买' : '卖',
-          style: TextStyle(color: entryColor, fontWeight: FontWeight.bold, fontSize: 10),
-        );
-        textPainter.layout();
-        textPainter.paint(canvas, Offset(entryX - textPainter.width/2, entryY + (trade.direction == Direction.long ? 26 : -36)));
-      }
-      
-      if (!trade.isOpen && trade.closeTime != null) {
-        final exitX = getXForTime(trade.closeTime!);
-        if (exitX != null) {
-          final exitY = getY(trade.closePrice!);
-          final exitColor = trade.direction == Direction.long ? Colors.green : Colors.red;
-          
-          _markerPaint.color = exitColor;
-          final path = Path();
-          if (trade.direction == Direction.long) {
-            path.moveTo(exitX, exitY - 15);
-            path.lineTo(exitX - 6, exitY - 25);
-            path.lineTo(exitX + 6, exitY - 25);
-          } else {
-            path.moveTo(exitX, exitY + 15);
-            path.lineTo(exitX - 6, exitY + 25);
-            path.lineTo(exitX + 6, exitY + 25);
-          }
-          path.close();
-          canvas.drawPath(path, _markerPaint);
-          
-          textPainter.text = TextSpan(
-            text: '平',
-            style: TextStyle(color: exitColor, fontWeight: FontWeight.bold, fontSize: 10),
-          );
-          textPainter.layout();
-          textPainter.paint(canvas, Offset(exitX - textPainter.width/2, exitY + (trade.direction == Direction.long ? -36 : 26)));
-        }
-      }
-      
-      if (trade.isOpen) {
-        final y = getY(trade.entryPrice);
-        if (y >= 0 && y <= chartHeight) {
-          final color = trade.direction == Direction.long ? Colors.redAccent : Colors.greenAccent;
-          _linePaint.color = color;
-          
-          for (double dx = 0; dx < plottingWidth; dx += 10) {
-            canvas.drawLine(Offset(dx, y), Offset(dx + 5, y), _linePaint);
-          }
-          
-          double pnl = trade.calculatePnL(currentPrice);
-          String label = "${trade.direction.label} @ ${trade.entryPrice.toStringAsFixed(1)}  ${pnl >= 0 ? '盈' : '亏'}: ${pnl.toStringAsFixed(0)}";
-          
-          textPainter.text = TextSpan(
-            text: label,
-            style: TextStyle(
-              color: pnl >= 0 ? Colors.red : Colors.green, 
-              fontWeight: FontWeight.bold, 
-              fontSize: 11,
-              backgroundColor: Colors.black87
-            ),
-          );
-          textPainter.layout();
-          textPainter.paint(canvas, Offset(10, y - 20));
-        }
-      }
+    // ===== 绘制持仓线 =====
+    _drawPositionLines(canvas, size, plottingWidth, chartHeight, getY);
+
+    // ===== 绘制交易标记 =====
+    _drawTradeMarkers(canvas, startIdx, endIdx, step, getY, chartHeight);
+
+    // ===== 绘制价格轴 =====
+    _drawPriceAxis(canvas, size, plottingWidth, topPrice, bottomPrice, range, getY);
+
+    // ===== 绘制最新价格标签 =====
+    if (visibleData.isNotEmpty) {
+      _drawCurrentPriceLabel(canvas, size, plottingWidth, getY, visibleData.last);
+    }
+
+    // ===== 绘制指标数值标签 =====
+    _drawIndicatorLabels(canvas, endIdx);
+  }
+
+  void _expandRange(int startIdx, int endIdx, List<double?> data, void Function(double) callback) {
+    for (int i = startIdx; i < endIdx && i < data.length; i++) {
+      if (data[i] != null) callback(data[i]!);
     }
   }
-  
-  void _drawMA(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY, Paint paint, List<double?> maData) {
-    if (maData.isEmpty) return;
-    
+
+  void _drawGrid(Canvas canvas, Size size, double plotWidth, double top, double bottom, double range, double Function(double) getY) {
+    for (int i = 1; i < 5; i++) {
+      double p = bottom + (range / 5) * i;
+      double y = getY(p);
+      canvas.drawLine(Offset(0, y), Offset(plotWidth, y), _gridPaint);
+    }
+  }
+
+  void _drawMALine(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY, List<double?> data, Paint paint) {
+    if (data.isEmpty) return;
+
     Path path = Path();
     bool started = false;
-    
+
     for (int i = 0; i < (endIdx - startIdx); i++) {
       int dataIdx = startIdx + i;
-      if (dataIdx >= maData.length) break;
-      
-      double? value = maData[dataIdx];
+      if (dataIdx >= data.length) break;
+
+      double? value = data[dataIdx];
       if (value == null) continue;
-      
+
       double x = i * step + step / 2;
       double y = getY(value);
-      
+
       if (!started) {
         path.moveTo(x, y);
         started = true;
@@ -264,14 +206,173 @@ class KlinePainter extends CustomPainter {
         path.lineTo(x, y);
       }
     }
-    
+
     if (started) {
       canvas.drawPath(path, paint);
     }
   }
 
-  @override
-  bool shouldRepaint(covariant KlinePainter old) {
-    return true;
+  void _drawPositionLines(Canvas canvas, Size size, double plotWidth, double chartHeight, double Function(double) getY) {
+    for (var trade in allTrades) {
+      if (!trade.isOpen) continue;
+
+      final y = getY(trade.entryPrice);
+      if (y < 0 || y > chartHeight) continue;
+
+      final color = trade.direction == Direction.long
+          ? AppColors.bullishBright
+          : AppColors.bearishBright;
+
+      _linePaint.color = color.withOpacity(0.6);
+      _linePaint.strokeWidth = 1.0;
+
+      // 虚线
+      double dx = 0;
+      while (dx < plotWidth) {
+        canvas.drawLine(Offset(dx, y), Offset(dx + 4, y), _linePaint);
+        dx += 8;
+      }
+
+      // 价格标签
+      String label = trade.entryPrice.toStringAsFixed(1);
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      // 背景
+      final labelRect = Rect.fromLTWH(plotWidth + 2, y - tp.height / 2 - 2, tp.width + 6, tp.height + 4);
+      _priceLabelBgPaint.color = color.withOpacity(0.2);
+      canvas.drawRRect(RRect.fromRectAndRadius(labelRect, const Radius.circular(3)), _priceLabelBgPaint);
+      tp.paint(canvas, Offset(plotWidth + 5, y - tp.height / 2));
+    }
   }
+
+  void _drawTradeMarkers(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY, double chartHeight) {
+
+    for (var trade in allTrades) {
+      final entryDataIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isAfter(trade.entryTime));
+      if (entryDataIdx >= startIdx && entryDataIdx < endIdx) {
+        final visibleIdx = entryDataIdx - startIdx;
+        final x = visibleIdx * step + step / 2;
+        final y = getY(trade.entryPrice);
+        final color = trade.direction == Direction.long ? AppColors.bullish : AppColors.bearish;
+
+        _markerPaint.color = color;
+        final path = Path();
+        if (trade.direction == Direction.long) {
+          path.moveTo(x, y + 12);
+          path.lineTo(x - 5, y + 20);
+          path.lineTo(x + 5, y + 20);
+        } else {
+          path.moveTo(x, y - 12);
+          path.lineTo(x - 5, y - 20);
+          path.lineTo(x + 5, y - 20);
+        }
+        path.close();
+        canvas.drawPath(path, _markerPaint);
+      }
+
+      if (!trade.isOpen && trade.closeTime != null) {
+        final closeDataIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime!) || k.time.isAfter(trade.closeTime!));
+        if (closeDataIdx >= startIdx && closeDataIdx < endIdx) {
+          final visibleIdx = closeDataIdx - startIdx;
+          final x = visibleIdx * step + step / 2;
+          final y = getY(trade.closePrice!);
+
+          _markerPaint.color = Colors.white70;
+          canvas.drawCircle(Offset(x, y), 4, _markerPaint);
+          final borderPaint = Paint()..color = trade.realizedPnL >= 0 ? AppColors.bullish : AppColors.bearish..strokeWidth = 1.5..style = PaintingStyle.stroke;
+          canvas.drawCircle(Offset(x, y), 4, borderPaint);
+        }
+      }
+    }
+  }
+
+  void _drawPriceAxis(Canvas canvas, Size size, double plotWidth, double top, double bottom, double range, double Function(double) getY) {
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    final axisX = plotWidth + 4;
+
+    for (int i = 0; i <= 5; i++) {
+      double p = bottom + (range / 5) * i;
+      double y = getY(p);
+      tp.text = TextSpan(
+        text: p.toStringAsFixed(2),
+        style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
+      );
+      tp.layout();
+      tp.paint(canvas, Offset(axisX, y - tp.height / 2));
+    }
+  }
+
+  void _drawCurrentPriceLabel(Canvas canvas, Size size, double plotWidth, double Function(double) getY, KlineModel last) {
+    final price = last.close;
+    final y = getY(price);
+    final isUp = price >= last.open;
+    final color = isUp ? AppColors.bullish : AppColors.bearish;
+
+    // 虚线
+    _linePaint.color = color.withOpacity(0.4);
+    _linePaint.strokeWidth = 0.8;
+    double dx = 0;
+    while (dx < plotWidth) {
+      canvas.drawLine(Offset(dx, y), Offset(dx + 3, y), _linePaint);
+      dx += 6;
+    }
+
+    // 价格标签背景
+    final tp = TextPainter(
+      text: TextSpan(
+        text: price.toStringAsFixed(2),
+        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final labelRect = Rect.fromLTWH(plotWidth, y - tp.height / 2 - 3, tp.width + 10, tp.height + 6);
+    _priceLabelBgPaint.color = color;
+    canvas.drawRRect(RRect.fromRectAndRadius(labelRect, const Radius.circular(3)), _priceLabelBgPaint);
+    tp.paint(canvas, Offset(plotWidth + 5, y - tp.height / 2));
+  }
+
+  void _drawIndicatorLabels(Canvas canvas, int endIdx) {
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    double offsetX = 5;
+
+    if (mainIndicator == MainIndicatorType.boll && bollData != null && endIdx > 0 && endIdx <= bollData!.upper.length) {
+      final u = bollData!.upper[endIdx - 1];
+      final m = bollData!.middle[endIdx - 1];
+      final l = bollData!.lower[endIdx - 1];
+      
+      tp.text = TextSpan(children: [
+        TextSpan(text: 'BOLL(20): ', style: TextStyle(color: AppColors.textMuted, fontSize: 10)),
+        if (u != null) TextSpan(text: 'UP:${u.toStringAsFixed(2)} ', style: TextStyle(color: AppColors.bollUp, fontSize: 10)),
+        if (m != null) TextSpan(text: 'MB:${m.toStringAsFixed(2)} ', style: TextStyle(color: AppColors.bollMid, fontSize: 10)),
+        if (l != null) TextSpan(text: 'DN:${l.toStringAsFixed(2)}', style: TextStyle(color: AppColors.bollDn, fontSize: 10)),
+      ]);
+      tp.layout();
+      tp.paint(canvas, Offset(offsetX, 5));
+    } else if (mainIndicator == MainIndicatorType.ma) {
+      List<TextSpan> spans = [];
+      if (ma5.isNotEmpty && endIdx > 0 && endIdx <= ma5.length && ma5[endIdx - 1] != null)
+        spans.add(TextSpan(text: 'MA5:${ma5[endIdx - 1]!.toStringAsFixed(2)} ', style: TextStyle(color: AppColors.ma5, fontSize: 10)));
+      if (ma10.isNotEmpty && endIdx > 0 && endIdx <= ma10.length && ma10[endIdx - 1] != null)
+        spans.add(TextSpan(text: 'MA10:${ma10[endIdx - 1]!.toStringAsFixed(2)} ', style: TextStyle(color: AppColors.ma10, fontSize: 10)));
+      if (ma20.isNotEmpty && endIdx > 0 && endIdx <= ma20.length && ma20[endIdx - 1] != null)
+        spans.add(TextSpan(text: 'MA20:${ma20[endIdx - 1]!.toStringAsFixed(2)}', style: TextStyle(color: AppColors.ma20, fontSize: 10)));
+      
+      if (spans.isNotEmpty) {
+        tp.text = TextSpan(children: spans);
+        tp.layout();
+        tp.paint(canvas, Offset(offsetX, 5));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant KlinePainter old) => true;
 }

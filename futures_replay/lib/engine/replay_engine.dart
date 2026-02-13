@@ -6,17 +6,20 @@ import '../services/data_service.dart';
 
 class ReplayEngine extends ChangeNotifier {
   final List<KlineModel> _all5mBytes; // Source data
-  final Period _viewPeriod; // Current Chart Period (e.g. 60m)
+  final Period _viewPeriod;
   
-  int _currentIndex = 0; // Index in _all5mBytes
-  int _endIndex = 0; // Where to stop
+  int _currentIndex = 0;
+  int _endIndex = 0;
   bool _isPlaying = false;
   Timer? _timer;
-  Duration _tickDuration = const Duration(milliseconds: 500); // Default speed
+  Duration _tickDuration = const Duration(milliseconds: 500);
+  
+  // 历史索引栈 (用于回退)
+  final List<int> _indexHistory = [];
   
   // Current Display Data
   List<KlineModel> _displayKlines = [];
-  KlineModel? _ghostBar; // The forming bar
+  KlineModel? _ghostBar;
   
   final DataService _dataService = DataService();
 
@@ -26,7 +29,6 @@ class ReplayEngine extends ChangeNotifier {
         ? (startIndex + limit).clamp(0, _all5mBytes.length) 
         : _all5mBytes.length;
     
-    // Initial Build
     _updateDisplayData();
   }
 
@@ -35,12 +37,17 @@ class ReplayEngine extends ChangeNotifier {
   bool get isPlaying => _isPlaying;
   int get currentProgress => _currentIndex;
   int get totalLength => _endIndex;
+  bool get canUndo => _indexHistory.isNotEmpty;
+  bool get isFinished => _currentIndex >= _endIndex - 1;
+  
   KlineModel? get currentQuote => _ghostBar ?? (_displayKlines.isNotEmpty ? _displayKlines.last : null);
 
   int get currentSpeedMs => _tickDuration.inMilliseconds;
+  
+  Period get viewPeriod => _viewPeriod;
 
   void play() {
-    if (_isPlaying) return;
+    if (_isPlaying || isFinished) return;
     _isPlaying = true;
     notifyListeners();
     _startTimer();
@@ -52,12 +59,29 @@ class ReplayEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  void togglePlayPause() {
+    if (_isPlaying) {
+      pause();
+    } else {
+      play();
+    }
+  }
+
   void next() {
     if (_currentIndex >= _endIndex - 1) {
       pause();
       return;
     }
+    _indexHistory.add(_currentIndex);
     _currentIndex++;
+    _updateDisplayData();
+    notifyListeners();
+  }
+
+  /// 回退一步
+  void undo() {
+    if (_indexHistory.isEmpty) return;
+    _currentIndex = _indexHistory.removeLast();
     _updateDisplayData();
     notifyListeners();
   }
@@ -74,19 +98,14 @@ class ReplayEngine extends ChangeNotifier {
     _timer = Timer.periodic(_tickDuration, (_) => next());
   }
 
-  /// Simple, reliable update - re-aggregate every time
   void _updateDisplayData() {
     if (_currentIndex >= _all5mBytes.length) return;
 
-    // Get all data from start to current
     List<KlineModel> subset = _all5mBytes.sublist(0, _currentIndex + 1);
-    
-    // Aggregate based on period
     List<KlineModel> aggregated = _dataService.aggregate(subset, _viewPeriod);
     
     if (aggregated.isEmpty) return;
     
-    // Last bar is always the "ghost bar" (forming)
     if (aggregated.length > 1) {
       _displayKlines = aggregated.sublist(0, aggregated.length - 1);
       _ghostBar = aggregated.last;
@@ -96,29 +115,28 @@ class ReplayEngine extends ChangeNotifier {
     }
   }
   
-  /// Jump to next completed K-line (skip to period boundary)
+  /// 跳到下一根完整K线
   void nextBar() {
     if (_currentIndex >= _endIndex - 1) {
       pause();
       return;
     }
     
-    // For 5m period, just go next
     if (_viewPeriod == Period.m5) {
       next();
       return;
     }
     
-    // Save current ghost bar start time
+    _indexHistory.add(_currentIndex);
+    
     final currentGhostTime = _ghostBar?.time;
     if (currentGhostTime == null) {
       next();
       return;
     }
     
-    // Keep advancing until we get a new ghost bar with different time
     int attempts = 0;
-    while (_currentIndex < _endIndex - 1 && attempts < 100) {
+    while (_currentIndex < _endIndex - 1 && attempts < 200) {
       _currentIndex++;
       _updateDisplayData();
       
@@ -130,5 +148,11 @@ class ReplayEngine extends ChangeNotifier {
     }
     
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 }

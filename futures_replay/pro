@@ -1,0 +1,186 @@
+# 产品需求文档 (PRD)：K线复盘训练系统重构
+
+## 1. 项目概述
+
+本项目旨在构建/优化一个专业的金融K线复盘训练工具（模拟交易系统）。用户可以通过回放历史行情数据，进行模拟开仓、平仓操作，以训练盘感和验证交易策略。系统支持现货与合约（期货）模式，并提供详细的盈亏统计。
+
+## 2. 技术栈建议 (推荐 AI 编译器使用)
+
+* **前端框架:** React Native (跨平台移动端) 或 Flutter，如果是Web版推荐 React + TailwindCSS。
+* **图表库:** TradingView Lightweight Charts (轻量、高性能) 或 ECharts。
+* **状态管理:** Zustand 或 Redux Toolkit (管理账户资金、持仓状态)。
+* **本地存储:** AsyncStorage 或 SQLite (保存复盘记录和用户配置)。
+
+---
+
+## 3. 页面详细需求
+
+### 3.1 首页 / 仪表盘 (参考截图 3)
+
+**功能描述:** 用户的资产概览及训练入口。
+
+* **头部数据卡片:**
+* **账户余额:** 显示当前虚拟资金总额 (如: 132540.15 金币)。
+* **累计盈亏:** 显示总收益额 (红/绿颜色区分)。
+
+
+* **统计仪表盘 (三列布局):**
+* **交易次数:** 累计开平仓次数。
+* **总收益率:** (总盈亏 / 初始本金) * 100%。
+* **胜率:** (盈利交易次数 / 总交易次数) * 100%。
+
+
+* **模式选择区 (卡片式):**
+* **现货训练 (只做多):** 支持复盘模式、随机训练、裸K训练。
+* **合约训练 (多空杠杆):** 支持复盘模式、随机训练、裸K训练。
+
+
+* **底部导航栏:** 首页、行情、交易所、设置。
+
+### 3.2 复盘配置页 (参考截图 2)
+
+**功能描述:** 开始训练前的参数设置。
+
+* **市场/品种选择:**
+* 顶部标签切换: 加密货币 / 国内期货。
+* 搜索框: 输入代码 (如 RB)。
+
+
+* **周期与时间:**
+* **K线周期:** 按钮组 (M1, M5, M15, M30, H1, H4, D1)。
+* **结束时间:** 日期选择器 (选择复盘行情的截止时间)。
+* **训练数量:** 输入框 (默认100根)，提供快捷按钮 (100, 200, 500, MAX)。
+
+
+* **显示设置:**
+* 显示模式: 竖屏 / 横屏 (单选按钮)。
+
+
+* **高级设置:**
+* 启用止盈止损: Toggle开关。
+
+
+* **操作按钮:** 取消 / 开始训练 (高亮)。
+
+### 3.3 交易训练主界面 (参考截图 1 - 核心功能)
+
+**功能描述:** 沉浸式 K 线回放与模拟下单界面。
+
+* **顶部状态栏:**
+* 品种信息: 名称 (RB)、最新价、涨跌幅。
+* 控制区: 周期切换 (15m, 30m, 1h)、设置、暂停/播放按钮。
+
+
+* **主图表区 (K线):**
+* **核心展示:** 蜡烛图 (Candlestick)。
+* **覆盖指标:**
+* MA (移动平均线): 5, 10, 20 等多周期。
+* BOLL (布林带): 上轨、中轨、下轨。
+
+
+* **持仓线:** 虚线标记开仓价格位置。
+
+
+* **副图表区 (指标):**
+* VOL (成交量): 柱状图 + MA线。
+* 底部指标切换栏: MACD, KDJ, RSI, WR 等，点击可切换副图显示内容。
+* **截图特有:** WR(14) 指标显示。
+
+
+* **数据浮窗:** 十字光标查价，显示 高、开、低、收、量。
+* **底部操作面板 (Action Bar):**
+* **左侧操作:**
+* **做多 (Buy Long):** 红色按钮。
+* **做空 (Sell Short):** 绿色按钮。
+* **平仓 (Close):** 灰色按钮 (持仓时高亮)。
+
+
+* **中间数据 (实时变动):**
+* 仓位 (手数/张数)。
+* 资产总值 (动态权益)。
+* 胜率 & 收益率。
+* 当前持仓盈亏 (未实现盈亏)。
+
+
+* **右侧控制:**
+* **回退 (Undo):** 撤销上一根K线/上一步操作 (悔棋功能)。
+* **观望 (Next/Skip):** 不操作，直接走一根K线。
+
+
+
+
+
+---
+
+## 4. 核心业务逻辑 (AI 必须理解的部分)
+
+### 4.1 数据切片与回放机制 (The Replay Engine)
+
+1. **数据加载:** 系统一次性请求选定时间段的历史数据 (例如 1000 根 K线)。
+2. **可视窗口 (Window):** 初始状态下，只渲染前 N 根 (配置中的“训练数量”，如 100 根)。
+3. **步进逻辑 (Step):**
+* 点击“观望”或自动播放时，可视窗口索引 +1 (`currentIndex++`)，渲染下一根 K 线。
+* **关键点:** 必须确保未来的数据（N+1 之后的数据）对用户不可见，严禁偷看未来。
+
+
+
+### 4.2 交易撮合逻辑
+
+1. **开仓:** 记录开仓价格 (`entryPrice`)、方向 (`direction`: 1为多, -1为空)、数量。
+2. **持仓计算:**
+* 每走一根 K 线，根据收盘价 (`closePrice`) 计算浮动盈亏。
+* **做多盈亏:** `(currentPrice - entryPrice) * quantity`
+* **做空盈亏:** `(entryPrice - currentPrice) * quantity`
+
+
+3. **平仓:**
+* 点击平仓时，结算盈亏，更新“账户余额”。
+* 记录该笔交易详情 (开仓时间、平仓时间、盈亏额) 用于统计胜率。
+
+
+
+### 4.3 指标计算
+
+* 系统需内置技术指标库。
+* **动态计算:** 当新的一根 K 线出现时，必须重新计算 MA、BOLL、MACD 等指标的最新值，确保指标线随价格跳动而延伸。
+
+---
+
+## 5. 给 AI 编译器的提示词 (Prompt)
+
+您可以直接复制以下内容到 AI 编辑器中：
+
+> **Role:** Senior Frontend Developer & Quant Engineer
+> **Task:** Refactor/Build a K-line Replay Training App based on the attached PRD.
+> **Core Requirements:**
+> 1. **UI Implementation:** Replicate the UI strictly according to the uploaded screenshots (Home, Config, and Trading Interface). Use a dark theme (financial trading style).
+> 2. **Chart Component:** Use a high-performance charting library. Implement the main chart with Candlesticks, MA lines, and Bollinger Bands. Implement a sub-chart allowing switching between Volume, MACD, KDJ, and WR.
+> 3. **Replay Logic:**
+> * Load a dataset of historical OHLCV data.
+> * Implement a "cursor" based system. Only render data up to the current cursor index.
+> * "Next/Wait" button increments the cursor.
+> * "Back" button decrements the cursor (and reverts any trades made on that candle).
+> 
+> 
+> 4. **Trading Simulation State:**
+> * Manage `Balance`, `Position`, `AvgPrice`, and `PnL` in a global store.
+> * Support Long and Short positions.
+> * Calculate Real-time PnL based on the current visible candle's Close price.
+> 
+> 
+> 5. **Statistics:**
+> * Calculate Win Rate and ROI dynamically as trades are closed.
+> 
+> 
+> 
+> 
+> **Technology:** [Insert your preferred tech stack here, e.g., React, TypeScript, Tailwind, Lightweight-charts]
+> Please start by setting up the data structure for the `Candle` and the `TradeState`.
+
+---
+
+### 建议优化点 (超越截图的建议)
+
+1. **K线重播速度:** 截图中右上角有暂停/播放，建议让 AI 增加一个“播放速度”滑块 (1x, 2x, 5x)。
+2. **复盘记录导出:** 增加一个功能，将复盘的交易记录生成一张长图或 Excel，方便用户总结。
+3. **多周期同列:** 截图目前只显示一个周期。专业的复盘通常需要“大周期看趋势，小周期找点位”。如果技术允许，建议增加“双屏联动”功能 (例如左边显示 1H，右边显示 5M)。

@@ -7,19 +7,34 @@ import '../../engine/trade_engine.dart';
 import '../../services/indicator_service.dart';
 import '../chart/kline_painter.dart';
 import '../chart/macd_painter.dart';
+import '../chart/volume_painter.dart';
+import '../chart/sub_chart_painter.dart';
 import '../chart/chart_view_controller.dart';
+import '../theme/app_theme.dart';
 import '../../models/trade_model.dart';
+import '../../services/account_service.dart';
+import 'package:intl/intl.dart';
+import '../widgets/order_panel.dart';
+
+/// 副图指标类型
+enum SubIndicatorType { vol, macd, kdj, rsi, wr }
 
 class MainScreen extends StatefulWidget {
   final List<KlineModel> allData;
   final int startIndex;
   final int? limit;
+  final String instrumentCode;
+  final Period initialPeriod;
+  final bool spotOnly;
 
   const MainScreen({
-    Key? key, 
-    required this.allData, 
-    required this.startIndex, 
-    this.limit
+    Key? key,
+    required this.allData,
+    required this.startIndex,
+    this.limit,
+    this.instrumentCode = 'RB',
+    this.initialPeriod = Period.m5,
+    this.spotOnly = false,
   }) : super(key: key);
 
   @override
@@ -31,51 +46,107 @@ class _MainScreenState extends State<MainScreen> {
   late TradeEngine _tradeEngine;
   late ChartViewController _chartController;
   final IndicatorService _indicatorService = IndicatorService();
-  
+
   Period _currentPeriod = Period.m5;
   bool _isInitialized = false;
-  
-  // 指标开关
-  bool _showMA = true;
-  bool _showMACD = true;
-  
+
+  // 主图指标
+  MainIndicatorType _mainIndicator = MainIndicatorType.boll;
+
+  // 副图指标
+  SubIndicatorType _subIndicator = SubIndicatorType.vol;
+
   // 指标数据缓存
+  List<double?> _ma5 = [];
   List<double?> _ma10 = [];
   List<double?> _ma20 = [];
+  BOLLResult _bollData = BOLLResult(upper: [], middle: [], lower: []);
   MACDResult _macdData = MACDResult(dif: [], dea: [], macdBar: []);
+  KDJResult _kdjData = KDJResult(k: [], d: [], j: []);
+  List<double?> _rsiData = [];
+  List<double?> _wrData = [];
+  List<double?> _volMa5 = [];
+  List<double?> _volMa10 = [];
 
   @override
   void initState() {
     super.initState();
+    _currentPeriod = widget.initialPeriod;
     _replayEngine = ReplayEngine(widget.allData, _currentPeriod, startIndex: widget.startIndex, limit: widget.limit);
     _tradeEngine = TradeEngine();
     _chartController = ChartViewController();
-    
+
     _replayEngine.addListener(_onReplayUpdate);
     _updateIndicators();
   }
-  
+
   @override
   void dispose() {
+    _submitResults();
     _replayEngine.removeListener(_onReplayUpdate);
+    _replayEngine.dispose();
+    _chartController.dispose();
     super.dispose();
   }
-  
+
+  /// 提交本次训练结果到全局账户
+  void _submitResults() {
+    final closedTrades = _tradeEngine.closedTrades;
+    if (closedTrades.isEmpty) return;
+
+    final sessionPnL = _tradeEngine.balance - 1000000; // 初始资金100万
+    final sessionTradeCount = closedTrades.length;
+    final sessionWinCount = closedTrades.where((t) => t.realizedPnL > 0).length;
+
+    try {
+      final accountService = context.read<AccountService>();
+      accountService.submitSessionResult(
+        sessionPnL: sessionPnL,
+        sessionTradeCount: sessionTradeCount,
+        sessionWinCount: sessionWinCount,
+      );
+    } catch (_) {
+      // context may not be available in dispose
+    }
+  }
+
   void _onReplayUpdate() {
     if (_isInitialized) {
       _chartController.updateDataLength(_replayEngine.displayKlines.length);
       _updateIndicators();
     }
   }
-  
+
   void _updateIndicators() {
     final data = _replayEngine.displayKlines;
     if (data.isEmpty) return;
-    
+
     setState(() {
+      _ma5 = _indicatorService.calculateMA(data, 5);
       _ma10 = _indicatorService.calculateMA(data, 10);
       _ma20 = _indicatorService.calculateMA(data, 20);
+      _bollData = _indicatorService.calculateBOLL(data);
       _macdData = _indicatorService.calculateMACD(data);
+      _kdjData = _indicatorService.calculateKDJ(data);
+      _rsiData = _indicatorService.calculateRSI(data);
+      _wrData = _indicatorService.calculateWR(data);
+      _volMa5 = _indicatorService.calculateVolumeMA(data, 5);
+      _volMa10 = _indicatorService.calculateVolumeMA(data, 10);
+    });
+  }
+
+  void _switchPeriod(Period p) {
+    if (p == _currentPeriod) return;
+    int currentIdx = _replayEngine.currentProgress;
+    _replayEngine.removeListener(_onReplayUpdate);
+    _replayEngine.dispose();
+
+    setState(() {
+      _currentPeriod = p;
+      _replayEngine = ReplayEngine(widget.allData, _currentPeriod, startIndex: currentIdx, limit: widget.limit);
+      _replayEngine.addListener(_onReplayUpdate);
+      _isInitialized = false;
+      _updateIndicators();
     });
   }
 
@@ -88,262 +159,648 @@ class _MainScreenState extends State<MainScreen> {
         ChangeNotifierProvider.value(value: _chartController),
       ],
       child: Scaffold(
-        appBar: AppBar(
-          title: const Text("期货复盘训练"),
-          actions: [
-            // MA开关
-            Row(
-              children: [
-                const Text('MA', style: TextStyle(fontSize: 12)),
-                Switch(
-                  value: _showMA,
-                  onChanged: (v) => setState(() => _showMA = v),
-                  activeColor: Colors.yellow,
-                ),
-              ],
-            ),
-            // MACD开关
-            Row(
-              children: [
-                const Text('MACD', style: TextStyle(fontSize: 12)),
-                Switch(
-                  value: _showMACD,
-                  onChanged: (v) => setState(() => _showMACD = v),
-                  activeColor: Colors.cyan,
-                ),
-              ],
-            ),
-            const SizedBox(width: 10),
-            // 周期选择
-            DropdownButton<Period>(
-              value: _currentPeriod,
-              dropdownColor: Colors.grey[800],
-              style: const TextStyle(color: Colors.white),
-              items: Period.values.map((p) => DropdownMenuItem(value: p, child: Text(p.label))).toList(),
-              onChanged: (p) {
-                if (p != null) {
-                  int currentIdx = _replayEngine.currentProgress;
-                  _replayEngine.removeListener(_onReplayUpdate);
-                  
-                  setState(() {
-                    _currentPeriod = p;
-                    _replayEngine = ReplayEngine(widget.allData, _currentPeriod, startIndex: currentIdx, limit: widget.limit);
-                    _replayEngine.addListener(_onReplayUpdate);
-                    _isInitialized = false;
-                    _updateIndicators();
-                  });
-                }
-              },
-            ),
-            IconButton(
-              icon: const Icon(Icons.skip_next),
-              tooltip: '跳转到最新',
-              onPressed: () => _chartController.jumpToLatest(),
-            ),
-          ],
+        backgroundColor: AppColors.bgDark,
+        body: SafeArea(
+          child: Column(
+            children: [
+              // 顶部状态栏
+              _buildTopBar(),
+              // 主图
+              Expanded(flex: 5, child: _buildMainChart()),
+              // 副图 (VOL / MACD / KDJ / RSI / WR)
+              Expanded(flex: 2, child: _buildSubChart()),
+              // 时间轴
+              _buildTimeAxis(),
+              // 指标切换栏
+              _buildIndicatorTabs(),
+              // 底部操作面板
+              _buildActionBar(),
+            ],
+          ),
         ),
-        body: Column(
-          children: [
-            // 主图区域
-            Expanded(
-              flex: _showMACD ? 5 : 7,
-              child: Consumer3<ReplayEngine, TradeEngine, ChartViewController>(
-                builder: (context, replay, trade, chartCtrl, child) {
-                  return LayoutBuilder(
-                    builder: (context, constraints) {
-                      if (!_isInitialized && replay.displayKlines.isNotEmpty) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          _chartController.initialize(
-                            constraints.maxWidth,
-                            replay.displayKlines.length,
-                            replay.displayKlines.length - 1,
-                          );
-                          setState(() => _isInitialized = true);
-                        });
-                      }
-                      
-                      return Listener(
-                        onPointerDown: (event) {
-                          _chartController.onDragStart();
-                        },
-                        onPointerMove: (event) {
-                          if (chartCtrl.isUserDragging) {
-                            _chartController.onDragUpdate(event.delta.dx);
-                          }
-                        },
-                        onPointerUp: (event) {
-                          _chartController.onDragEnd();
-                        },
-                        child: Container(
-                          color: Colors.black,
-                          width: double.infinity,
-                          child: _isInitialized
-                              ? CustomPaint(
-                                  painter: KlinePainter(
-                                    allData: replay.displayKlines,
-                                    allTrades: trade.allTrades,
-                                    viewController: chartCtrl,
-                                    currentPrice: replay.currentQuote?.close ?? 0,
-                                    ma10: _ma10,
-                                    ma20: _ma20,
-                                    showMA: _showMA,
-                                  ),
-                                )
-                              : const Center(child: CircularProgressIndicator()),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-            
-            // MACD副图
-            if (_showMACD)
-              Expanded(
-                flex: 2,
-                child: Consumer<ChartViewController>(
-                  builder: (context, chartCtrl, child) {
-                    return Container(
-                      color: Colors.black,
-                      width: double.infinity,
-                      child: _isInitialized
-                          ? CustomPaint(
-                              painter: MACDPainter(
-                                macdData: _macdData,
-                                viewController: chartCtrl,
-                                dataLength: _replayEngine.displayKlines.length,
-                              ),
-                            )
-                          : const SizedBox(),
-                    );
-                  },
-                ),
-              ),
-            
-            // 信息栏
-            Consumer2<ReplayEngine, TradeEngine>(
-              builder: (ctx, replay, trade, _) {
-                 final quote = replay.currentQuote;
-                 final price = quote?.close ?? 0;
-                 return Container(
-                   height: 40,
-                   color: Colors.grey[900],
-                   child: Row(
-                     mainAxisAlignment: MainAxisAlignment.spaceAround,
-                     children: [
-                       Text("价格: ${price.toStringAsFixed(1)}", style: const TextStyle(color: Colors.white, fontSize: 14)),
-                       if (_showMA && _ma10.isNotEmpty && _ma10.last != null)
-                         Text("MA10: ${_ma10.last!.toStringAsFixed(1)}", style: const TextStyle(color: Colors.yellow, fontSize: 12)),
-                       if (_showMA && _ma20.isNotEmpty && _ma20.last != null)
-                         Text("MA20: ${_ma20.last!.toStringAsFixed(1)}", style: const TextStyle(color: Colors.cyan, fontSize: 12)),
-                       Text("持仓: ${trade.activePositions.length}", style: const TextStyle(color: Colors.white)),
-                       Text("浮盈: ${trade.calculateFloatingPnL(price).toStringAsFixed(0)}", 
-                          style: TextStyle(color: trade.calculateFloatingPnL(price) >= 0 ? Colors.red : Colors.green)),
-                     ],
-                   ),
-                 );
-              }
-            ),
+      ),
+    );
+  }
 
-            // 控制区
-            Expanded(
-              flex: 2,
-              child: Row(
+  // ===== 顶部状态栏 =====
+  Widget _buildTopBar() {
+    return Consumer<ReplayEngine>(
+      builder: (ctx, replay, _) {
+        final quote = replay.currentQuote;
+        final price = quote?.close ?? 0;
+        final open = quote?.open ?? 0;
+        final high = quote?.high ?? 0;
+        final low = quote?.low ?? 0;
+        final vol = quote?.volume ?? 0;
+        final change = open != 0 ? ((price - open) / open * 100) : 0.0;
+        final isUp = price >= open;
+
+        return Container(
+          color: AppColors.bgDark,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Column(
+            children: [
+              Row(
                 children: [
-                  Expanded(
-                    child: Consumer2<ReplayEngine, TradeEngine>(
-                      builder: (ctx, replay, trade, _) {
-                        return Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                                    onPressed: () {
-                                       trade.placeOrder(Direction.long, 1, replay.currentQuote?.close ?? 0, replay.currentQuote?.time ?? DateTime.now());
-                                    },
-                                    child: const Text("买多"),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                                    onPressed: () {
-                                      trade.placeOrder(Direction.short, 1, replay.currentQuote?.close ?? 0, replay.currentQuote?.time ?? DateTime.now());
-                                    },
-                                    child: const Text("卖空"),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 5),
-                              ElevatedButton(
-                                onPressed: () {
-                                  trade.closeAll(replay.currentQuote?.close ?? 0, replay.currentQuote?.time ?? DateTime.now());
-                                },
-                                child: const Text("平仓"),
-                              )
-                            ],
-                          ),
-                        );
-                      }
+                  // 返回 + 标题
+                  GestureDetector(
+                    onTap: () {
+                      _submitResults();
+                      Navigator.pop(context);
+                    },
+                    child: Row(
+                      children: [
+                        const Icon(Icons.chevron_left, color: AppColors.textPrimary, size: 22),
+                        const SizedBox(width: 2),
+                        const Text('K线训练营', style: TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+                      ],
                     ),
                   ),
-                  
-                  Expanded(
-                    child: Consumer<ReplayEngine>(
-                      builder: (ctx, engine, _) {
-                        return Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.play_arrow), 
-                                  tooltip: '播放',
-                                  onPressed: engine.play
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.pause), 
-                                  tooltip: '暂停',
-                                  onPressed: engine.pause
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.skip_next), 
-                                  tooltip: '下一个5分钟',
-                                  onPressed: engine.next
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.fast_forward), 
-                                  tooltip: '下一根K线',
-                                  onPressed: engine.nextBar,
-                                  color: Colors.orange,
-                                ),
-                              ],
-                            ),
-                            Slider(
-                                value: engine.currentSpeedMs.toDouble(),
-                                min: 100, 
-                                max: 2000, 
-                                divisions: 19,
-                                label: "${engine.currentSpeedMs}ms",
-                                onChanged: (v) => engine.setSpeed(Duration(milliseconds: v.toInt()))
-                            ),
-                          ],
-                        );
-                      }
+                  const SizedBox(width: 12),
+
+                  // 品种名 + 最新价 + 涨跌幅
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
                     ),
-                  )
+                    child: Text(
+                      widget.instrumentCode,
+                      style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    '最新价: ',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                  ),
+                  Text(
+                    price.toStringAsFixed(1),
+                    style: TextStyle(
+                      color: isUp ? AppColors.bullish : AppColors.bearish,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${change >= 0 ? "+" : ""}${change.toStringAsFixed(2)}%',
+                    style: TextStyle(
+                      color: isUp ? AppColors.bullish : AppColors.bearish,
+                      fontSize: 12,
+                    ),
+                  ),
+
+                  const Spacer(),
+
+                  // 周期选择
+                  ..._buildPeriodTabs(),
+
+                  const SizedBox(width: 6),
+                  // 设置
+                  GestureDetector(
+                    onTap: () => _showSpeedDialog(),
+                    child: const Icon(Icons.settings, color: AppColors.textMuted, size: 18),
+                  ),
+                  const SizedBox(width: 8),
+                  // 播放/暂停
+                  GestureDetector(
+                    onTap: () => replay.togglePlayPause(),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: replay.isPlaying ? AppColors.bullish : AppColors.primary,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Icon(
+                        replay.isPlaying ? Icons.pause : Icons.play_arrow,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                  ),
                 ],
               ),
-            )
+              // 高开低收量
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Spacer(),
+                  _buildQuoteItem('高', high, isUp),
+                  const SizedBox(width: 12),
+                  _buildQuoteItem('低', low, isUp),
+                  const SizedBox(width: 12),
+                  _buildQuoteItem('量', vol, null, isVolume: true),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuoteItem(String label, double value, bool? isUp, {bool isVolume = false}) {
+    String text = isVolume ? _formatVolume(value) : value.toStringAsFixed(1);
+    return Text(
+      '$label: $text',
+      style: TextStyle(
+        color: isUp == null ? AppColors.textSecondary : (isUp ? AppColors.bullish : AppColors.bearish),
+        fontSize: 11,
+      ),
+    );
+  }
+
+  List<Widget> _buildPeriodTabs() {
+    final periods = [Period.m5, Period.m15, Period.m30, Period.h1];
+    return periods.map((p) {
+      final isSelected = _currentPeriod == p;
+      return GestureDetector(
+        onTap: () => _switchPeriod(p),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          margin: const EdgeInsets.only(right: 2),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.warning : Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            p.code,
+            style: TextStyle(
+              color: isSelected ? Colors.black : AppColors.textMuted,
+              fontSize: 12,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  // ===== 主图 =====
+  Widget _buildMainChart() {
+    return Consumer3<ReplayEngine, TradeEngine, ChartViewController>(
+      builder: (context, replay, trade, chartCtrl, _) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            if (!_isInitialized && replay.displayKlines.isNotEmpty) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _chartController.initialize(
+                  constraints.maxWidth,
+                  replay.displayKlines.length,
+                  replay.displayKlines.length - 1,
+                );
+                setState(() => _isInitialized = true);
+              });
+            }
+
+            return GestureDetector(
+              onHorizontalDragStart: (_) => _chartController.onDragStart(),
+              onHorizontalDragUpdate: (d) {
+                if (chartCtrl.isUserDragging) {
+                  _chartController.onDragUpdate(d.delta.dx);
+                }
+              },
+              onHorizontalDragEnd: (_) => _chartController.onDragEnd(),
+              onScaleUpdate: (details) {
+                if (details.scale != 1.0) {
+                  _chartController.setScale(chartCtrl.scale * details.scale);
+                }
+              },
+              child: Container(
+                color: AppColors.bgOverlay,
+                width: double.infinity,
+                child: _isInitialized
+                    ? CustomPaint(
+                        painter: KlinePainter(
+                          allData: replay.displayKlines,
+                          allTrades: trade.allTrades,
+                          viewController: chartCtrl,
+                          currentPrice: replay.currentQuote?.close ?? 0,
+                          ma5: _ma5,
+                          ma10: _ma10,
+                          ma20: _ma20,
+                          bollData: _bollData,
+                          mainIndicator: _mainIndicator,
+                        ),
+                      )
+                    : const Center(
+                        child: CircularProgressIndicator(color: AppColors.primary),
+                      ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ===== 副图 =====
+  Widget _buildSubChart() {
+    return Consumer<ChartViewController>(
+      builder: (context, chartCtrl, _) {
+        if (!_isInitialized) return const SizedBox();
+        final dataLen = _replayEngine.displayKlines.length;
+
+        return Container(
+          width: double.infinity,
+          decoration: const BoxDecoration(
+            color: AppColors.bgOverlay,
+            border: Border(
+              top: BorderSide(color: AppColors.border, width: 0.5),
+            ),
+          ),
+          child: CustomPaint(
+            painter: _buildSubChartPainter(chartCtrl, dataLen),
+          ),
+        );
+      },
+    );
+  }
+
+  CustomPainter _buildSubChartPainter(ChartViewController chartCtrl, int dataLen) {
+    switch (_subIndicator) {
+      case SubIndicatorType.vol:
+        return VolumePainter(
+          allData: _replayEngine.displayKlines,
+          viewController: chartCtrl,
+          volMa5: _volMa5,
+          volMa10: _volMa10,
+        );
+      case SubIndicatorType.macd:
+        return MACDPainter(
+          macdData: _macdData,
+          viewController: chartCtrl,
+          dataLength: dataLen,
+        );
+      case SubIndicatorType.kdj:
+        return createKDJPainter(
+          kdjData: _kdjData,
+          viewController: chartCtrl,
+          dataLength: dataLen,
+        );
+      case SubIndicatorType.rsi:
+        return createRSIPainter(
+          rsiData: _rsiData,
+          viewController: chartCtrl,
+          dataLength: dataLen,
+        );
+      case SubIndicatorType.wr:
+        return createWRPainter(
+          wrData: _wrData,
+          viewController: chartCtrl,
+          dataLength: dataLen,
+        );
+    }
+  }
+
+  // ===== 时间轴 =====
+  Widget _buildTimeAxis() {
+    return Consumer<ReplayEngine>(
+      builder: (ctx, replay, _) {
+        final klines = replay.displayKlines;
+        if (klines.isEmpty) return const SizedBox(height: 16);
+
+        final first = klines.first.time;
+        final last = klines.last.time;
+
+        return Container(
+          height: 20,
+          color: AppColors.bgOverlay,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(DateFormat('MM-dd HH:mm').format(first), style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+              Text(DateFormat('MM-dd HH:mm').format(last), style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ===== 指标切换栏 =====
+  Widget _buildIndicatorTabs() {
+    return Container(
+      height: 34,
+      color: AppColors.bgDark,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          children: [
+            // 主图指标
+            _buildIndicatorTab('分时', false, () {}),
+            _buildIndicatorTab('MA', _mainIndicator == MainIndicatorType.ma, () => setState(() => _mainIndicator = MainIndicatorType.ma)),
+            _buildIndicatorTab('EMA', _mainIndicator == MainIndicatorType.ema, () => setState(() => _mainIndicator = MainIndicatorType.ema)),
+            _buildIndicatorTab('BOLL', _mainIndicator == MainIndicatorType.boll, () => setState(() => _mainIndicator = MainIndicatorType.boll)),
+            Container(width: 1, height: 16, color: AppColors.borderLight, margin: const EdgeInsets.symmetric(horizontal: 6)),
+            // 副图指标
+            _buildIndicatorTab('VOL', _subIndicator == SubIndicatorType.vol, () => setState(() => _subIndicator = SubIndicatorType.vol)),
+            _buildIndicatorTab('MACD', _subIndicator == SubIndicatorType.macd, () => setState(() => _subIndicator = SubIndicatorType.macd)),
+            _buildIndicatorTab('KDJ', _subIndicator == SubIndicatorType.kdj, () => setState(() => _subIndicator = SubIndicatorType.kdj)),
+            _buildIndicatorTab('RSI', _subIndicator == SubIndicatorType.rsi, () => setState(() => _subIndicator = SubIndicatorType.rsi)),
+            _buildIndicatorTab('WR', _subIndicator == SubIndicatorType.wr, () => setState(() => _subIndicator = SubIndicatorType.wr)),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => _showSpeedDialog(),
+              child: const Icon(Icons.tune, color: AppColors.textMuted, size: 18),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildIndicatorTab(String label, bool isActive, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isActive ? AppColors.warning : AppColors.textMuted,
+            fontSize: 13,
+            fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ===== 底部操作面板 =====
+  Widget _buildActionBar() {
+    return Consumer2<ReplayEngine, TradeEngine>(
+      builder: (ctx, replay, trade, _) {
+        final price = replay.currentQuote?.close ?? 0;
+        final time = replay.currentQuote?.time ?? DateTime.now();
+        final floatingPnL = trade.calculateFloatingPnL(price);
+        final totalEquity = trade.balance + floatingPnL;
+        final hasPosition = trade.activePositions.isNotEmpty;
+        final closedTrades = trade.closedTrades;
+        final winCount = closedTrades.where((t) => t.realizedPnL > 0).length;
+        final winRate = closedTrades.isEmpty ? 0.0 : (winCount / closedTrades.length * 100);
+        final roi = ((totalEquity - 1000000) / 1000000 * 100);
+
+        return Container(
+          color: AppColors.bgCard,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 数据行
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildDataItem('仓位', hasPosition ? '${trade.activePositions.length}' : '0'),
+                  _buildDataItem('资产总值', totalEquity.toStringAsFixed(2), color: totalEquity >= 1000000 ? AppColors.bullish : AppColors.bearish),
+                  _buildDataItem('胜率', '${winRate.toStringAsFixed(2)}%', color: winRate > 50 ? AppColors.bullish : AppColors.textSecondary),
+                  _buildDataItem('收益率', '${roi.toStringAsFixed(2)}%', color: roi >= 0 ? AppColors.bullish : AppColors.bearish),
+                  _buildDataItem('盈亏', floatingPnL.toStringAsFixed(2), color: floatingPnL >= 0 ? AppColors.bullish : AppColors.bearish),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // 按钮行
+              Row(
+                children: [
+                  // 做多按钮
+                  Expanded(
+                    child: _buildTradeButton(
+                      '做多',
+                      AppColors.bullish,
+                      widget.spotOnly || !hasPosition
+                          ? () => _showOrderPanel(context, trade, price, time, Direction.long)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // 做空按钮 (现货模式隐藏)
+                  if (!widget.spotOnly)
+                    Expanded(
+                      child: _buildTradeButton(
+                        '做空',
+                        AppColors.bearish,
+                        !hasPosition ? () => _showOrderPanel(context, trade, price, time, Direction.short) : null,
+                      ),
+                    ),
+                  if (!widget.spotOnly) const SizedBox(width: 8),
+                  // 平仓按钮
+                  SizedBox(
+                    width: 56,
+                    child: _buildTradeButton(
+                      '平仓',
+                      hasPosition ? AppColors.warning : AppColors.bgSurface,
+                      hasPosition ? () => trade.closeAll(price, time) : null,
+                      small: true,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // 向上图标（跳到最新）
+                  GestureDetector(
+                    onTap: () => _chartController.jumpToLatest(),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: AppColors.bgSurface,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppColors.borderLight),
+                      ),
+                      child: const Icon(Icons.keyboard_double_arrow_up, color: AppColors.textMuted, size: 18),
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  // 回退
+                  _buildControlButton(
+                    '回退',
+                    Icons.undo,
+                    replay.canUndo ? () => replay.undo() : null,
+                  ),
+                  const SizedBox(width: 8),
+                  // 观望（下一根K线）
+                  _buildControlButton(
+                    '观望',
+                    Icons.skip_next,
+                    replay.isFinished ? null : () => replay.nextBar(),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDataItem(String label, String value, {Color? color}) {
+    return Column(
+      children: [
+        Text(value, style: TextStyle(color: color ?? AppColors.textPrimary, fontSize: 13, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+      ],
+    );
+  }
+
+  Widget _buildTradeButton(String label, Color color, VoidCallback? onPressed, {bool small = false}) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        height: 38,
+        decoration: BoxDecoration(
+          color: onPressed != null ? color : color.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: onPressed != null ? Colors.white : Colors.white38,
+              fontSize: small ? 13 : 15,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButton(String label, IconData icon, VoidCallback? onPressed) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.bgSurface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: onPressed != null ? AppColors.borderLight : AppColors.border),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: onPressed != null ? AppColors.textPrimary : AppColors.textMuted, size: 18),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(color: onPressed != null ? AppColors.textPrimary : AppColors.textMuted, fontSize: 10)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showOrderPanel(BuildContext context, TradeEngine trade, double price, DateTime time, Direction? initialDirection) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black54,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16),
+        child: OrderPanel(
+          currentPrice: price,
+          availableMargin: trade.availableMargin,
+          onSubmit: (dir, qty, leverage) {
+            trade.placeOrder(dir, qty, price, time, leverage: leverage);
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showSpeedDialog() {
+    int currentMs = _replayEngine.currentSpeedMs;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.bgCard,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Center(
+                    child: Text('播放设置', style: TextStyle(color: AppColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(height: 24),
+                  const Text('播放速度', style: TextStyle(color: AppColors.textSecondary, fontSize: 14)),
+                  const SizedBox(height: 12),
+                  Column(
+                    children: [
+                      Slider(
+                        value: currentMs.toDouble(),
+                        min: 50,
+                        max: 2000,
+                        divisions: 39,
+                        activeColor: AppColors.primary,
+                        label: '${currentMs}ms',
+                        onChanged: (v) {
+                          currentMs = v.toInt();
+                          _replayEngine.setSpeed(Duration(milliseconds: currentMs));
+                          setModalState(() {});
+                        },
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('快', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+                          Text('${currentMs}ms/tick', style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
+                          const Text('慢', style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  // 快捷速度按钮
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [100, 250, 500, 1000].map((ms) {
+                      final labels = {100: '5x', 250: '2x', 500: '1x', 1000: '0.5x'};
+                      final isSelected = currentMs == ms;
+                      return GestureDetector(
+                        onTap: () {
+                          currentMs = ms;
+                          _replayEngine.setSpeed(Duration(milliseconds: ms));
+                          setModalState(() {});
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isSelected ? AppColors.primary : AppColors.bgSurface,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: isSelected ? AppColors.primary : AppColors.borderLight),
+                          ),
+                          child: Text(
+                            labels[ms]!,
+                            style: TextStyle(
+                              color: isSelected ? Colors.white : AppColors.textSecondary,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+  String _formatVolume(double vol) {
+    if (vol >= 10000) return '${(vol / 10000).toStringAsFixed(2)}万';
+    if (vol >= 1000) return '${(vol / 1000).toStringAsFixed(2)}K';
+    return vol.toStringAsFixed(0);
   }
 }
