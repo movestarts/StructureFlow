@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import '../models/kline_model.dart';
 
 /// 技术指标计算服务
@@ -5,70 +7,69 @@ class IndicatorService {
 
   /// 计算简单移动平均线 (SMA)
   List<double?> calculateMA(List<KlineModel> data, int period) {
-    List<double?> result = [];
+    List<double?> result = List.filled(data.length, null);
+    if (period <= 0 || data.isEmpty) return result;
 
+    double sum = 0;
     for (int i = 0; i < data.length; i++) {
-      if (i < period - 1) {
-        result.add(null);
-      } else {
-        double sum = 0;
-        for (int j = i - period + 1; j <= i; j++) {
-          sum += data[j].close;
-        }
-        result.add(sum / period);
+      sum += data[i].close;
+      if (i >= period) {
+        sum -= data[i - period].close;
+      }
+      if (i >= period - 1) {
+        result[i] = sum / period;
       }
     }
-
     return result;
   }
 
   /// 计算成交量均线
   List<double?> calculateVolumeMA(List<KlineModel> data, int period) {
-    List<double?> result = [];
+    List<double?> result = List.filled(data.length, null);
+    if (period <= 0 || data.isEmpty) return result;
 
+    double sum = 0;
     for (int i = 0; i < data.length; i++) {
-      if (i < period - 1) {
-        result.add(null);
-      } else {
-        double sum = 0;
-        for (int j = i - period + 1; j <= i; j++) {
-          sum += data[j].volume;
-        }
-        result.add(sum / period);
+      sum += data[i].volume;
+      if (i >= period) {
+        sum -= data[i - period].volume;
+      }
+      if (i >= period - 1) {
+        result[i] = sum / period;
       }
     }
-
     return result;
   }
 
   /// 计算布林带 (BOLL)
   BOLLResult calculateBOLL(List<KlineModel> data, {int period = 20, double multiplier = 2.0}) {
-    List<double?> upper = [];
-    List<double?> middle = [];
-    List<double?> lower = [];
+    List<double?> upper = List.filled(data.length, null);
+    List<double?> middle = List.filled(data.length, null);
+    List<double?> lower = List.filled(data.length, null);
+    if (period <= 0 || data.isEmpty) {
+      return BOLLResult(upper: upper, middle: middle, lower: lower);
+    }
 
+    double sum = 0;
+    double sumSquares = 0;
     for (int i = 0; i < data.length; i++) {
-      if (i < period - 1) {
-        upper.add(null);
-        middle.add(null);
-        lower.add(null);
-      } else {
-        double sum = 0;
-        for (int j = i - period + 1; j <= i; j++) {
-          sum += data[j].close;
-        }
-        double ma = sum / period;
+      final close = data[i].close;
+      sum += close;
+      sumSquares += close * close;
 
-        double variance = 0;
-        for (int j = i - period + 1; j <= i; j++) {
-          double diff = data[j].close - ma;
-          variance += diff * diff;
-        }
-        double stddev = _sqrt(variance / period);
+      if (i >= period) {
+        final old = data[i - period].close;
+        sum -= old;
+        sumSquares -= old * old;
+      }
 
-        upper.add(ma + multiplier * stddev);
-        middle.add(ma);
-        lower.add(ma - multiplier * stddev);
+      if (i >= period - 1) {
+        final ma = sum / period;
+        final variance = ((sumSquares / period) - (ma * ma)).clamp(0, double.infinity);
+        final stddev = math.sqrt(variance);
+        upper[i] = ma + multiplier * stddev;
+        middle[i] = ma;
+        lower[i] = ma - multiplier * stddev;
       }
     }
 
@@ -299,15 +300,6 @@ class IndicatorService {
     return result;
   }
 
-  /// 简易平方根（手动实现避免引入dart:math依赖问题）
-  double _sqrt(double value) {
-    if (value <= 0) return 0;
-    double guess = value / 2;
-    for (int i = 0; i < 20; i++) {
-      guess = (guess + value / guess) / 2;
-    }
-    return guess;
-  }
 }
 
 /// BOLL计算结果

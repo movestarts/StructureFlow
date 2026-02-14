@@ -121,5 +121,13 @@ class VolumePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant VolumePainter old) => true;
+  bool shouldRepaint(covariant VolumePainter old) {
+    return old.allData != allData ||
+        old.volMa5 != volMa5 ||
+        old.volMa10 != volMa10 ||
+        old.viewController.visibleStartIndex != viewController.visibleStartIndex ||
+        old.viewController.visibleEndIndex != viewController.visibleEndIndex ||
+        old.viewController.candleWidth != viewController.candleWidth ||
+        old.viewController.step != viewController.step;
+  }
 }

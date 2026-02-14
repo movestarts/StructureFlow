@@ -128,5 +128,12 @@ class MACDPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant MACDPainter old) => true;
+  bool shouldRepaint(covariant MACDPainter old) {
+    return old.macdData != macdData ||
+        old.dataLength != dataLength ||
+        old.viewController.visibleStartIndex != viewController.visibleStartIndex ||
+        old.viewController.visibleEndIndex != viewController.visibleEndIndex ||
+        old.viewController.candleWidth != viewController.candleWidth ||
+        old.viewController.step != viewController.step;
+  }
 }

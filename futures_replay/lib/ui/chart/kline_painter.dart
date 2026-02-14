@@ -257,9 +257,7 @@ class KlinePainter extends CustomPainter {
 
     for (var trade in allTrades) {
       // 1. Draw Entry Marker
-      // Fix: Use lastIndexWhere to find the bar that STARTED before or at the trade time.
-      // This handles intra-bar times correctly (e.g. Trade 10:15 matches Bar 10:00, not Bar 10:30)
-      final entryIdx = allData.lastIndexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isBefore(trade.entryTime));
+      final entryIdx = _findBarIndexAtOrBefore(trade.entryTime);
       
       if (entryIdx >= startIdx && entryIdx < endIdx) {
         final kline = allData[entryIdx];
@@ -275,7 +273,7 @@ class KlinePainter extends CustomPainter {
 
       // 2. Draw Exit Marker
       if (!trade.isOpen && trade.closeTime != null) {
-        final closeIdx = allData.lastIndexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime!) || k.time.isBefore(trade.closeTime!));
+        final closeIdx = _findBarIndexAtOrBefore(trade.closeTime!);
         
         if (closeIdx >= startIdx && closeIdx < endIdx) {
            final kline = allData[closeIdx];
@@ -292,6 +290,27 @@ class KlinePainter extends CustomPainter {
         }
       }
     }
+  }
+
+  int _findBarIndexAtOrBefore(DateTime target) {
+    if (allData.isEmpty) return -1;
+    if (allData.first.time.isAfter(target)) return -1;
+
+    int left = 0;
+    int right = allData.length - 1;
+    int answer = -1;
+
+    while (left <= right) {
+      final mid = (left + right) >> 1;
+      final t = allData[mid].time;
+      if (t.isAtSameMomentAs(target) || t.isBefore(target)) {
+        answer = mid;
+        left = mid + 1;
+      } else {
+        right = mid - 1;
+      }
+    }
+    return answer;
   }
 
   void _drawMarkerBadge(Canvas canvas, double x, double y, bool isBuy, String text, bool isEntry) {
@@ -425,5 +444,18 @@ class KlinePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant KlinePainter old) => true;
+  bool shouldRepaint(covariant KlinePainter old) {
+    return old.allData != allData ||
+        old.allTrades != allTrades ||
+        old.currentPrice != currentPrice ||
+        old.ma5 != ma5 ||
+        old.ma10 != ma10 ||
+        old.ma20 != ma20 ||
+        old.bollData != bollData ||
+        old.mainIndicator != mainIndicator ||
+        old.viewController.visibleStartIndex != viewController.visibleStartIndex ||
+        old.viewController.visibleEndIndex != viewController.visibleEndIndex ||
+        old.viewController.candleWidth != viewController.candleWidth ||
+        old.viewController.step != viewController.step;
+  }
 }

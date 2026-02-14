@@ -36,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             _buildHomePage(),
             _buildPlaceholder('行情'),
-            _buildPlaceholder('交易所'),
+
             const SettingsScreen(),
           ],
         ),
@@ -486,7 +486,7 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home_rounded), label: '首页'),
           BottomNavigationBarItem(icon: Icon(Icons.show_chart), label: '行情'),
-          BottomNavigationBarItem(icon: Icon(Icons.account_balance), label: '交易所'),
+
           BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
         ],
       ),

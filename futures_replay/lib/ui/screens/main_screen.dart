@@ -203,17 +203,50 @@ class _MainScreenState extends State<MainScreen> {
     if (data.isEmpty) return;
 
     setState(() {
-      _ma5 = _indicatorService.calculateMA(data, 5);
-      _ma10 = _indicatorService.calculateMA(data, 10);
-      _ma20 = _indicatorService.calculateMA(data, 20);
-      _bollData = _indicatorService.calculateBOLL(data);
-      _macdData = _indicatorService.calculateMACD(data);
-      _kdjData = _indicatorService.calculateKDJ(data);
-      _rsiData = _indicatorService.calculateRSI(data);
-      _wrData = _indicatorService.calculateWR(data);
-      _volMa5 = _indicatorService.calculateVolumeMA(data, 5);
-      _volMa10 = _indicatorService.calculateVolumeMA(data, 10);
+      if (_mainIndicator == MainIndicatorType.ma || _mainIndicator == MainIndicatorType.ema) {
+        _ma5 = _indicatorService.calculateMA(data, 5);
+        _ma10 = _indicatorService.calculateMA(data, 10);
+        _ma20 = _indicatorService.calculateMA(data, 20);
+      }
+      if (_mainIndicator == MainIndicatorType.boll) {
+        _bollData = _indicatorService.calculateBOLL(data);
+      }
+
+      switch (_subIndicator) {
+        case SubIndicatorType.vol:
+          _volMa5 = _indicatorService.calculateVolumeMA(data, 5);
+          _volMa10 = _indicatorService.calculateVolumeMA(data, 10);
+          break;
+        case SubIndicatorType.macd:
+          _macdData = _indicatorService.calculateMACD(data);
+          break;
+        case SubIndicatorType.kdj:
+          _kdjData = _indicatorService.calculateKDJ(data);
+          break;
+        case SubIndicatorType.rsi:
+          _rsiData = _indicatorService.calculateRSI(data);
+          break;
+        case SubIndicatorType.wr:
+          _wrData = _indicatorService.calculateWR(data);
+          break;
+      }
     });
+  }
+
+  void _setMainIndicator(MainIndicatorType indicator) {
+    if (_mainIndicator == indicator) return;
+    setState(() {
+      _mainIndicator = indicator;
+    });
+    _updateIndicators();
+  }
+
+  void _setSubIndicator(SubIndicatorType indicator) {
+    if (_subIndicator == indicator) return;
+    setState(() {
+      _subIndicator = indicator;
+    });
+    _updateIndicators();
   }
 
   void _switchPeriod(Period p) {
@@ -574,16 +607,16 @@ class _MainScreenState extends State<MainScreen> {
           children: [
             // 主图指标
             _buildIndicatorTab('分时', false, () {}),
-            _buildIndicatorTab('MA', _mainIndicator == MainIndicatorType.ma, () => setState(() => _mainIndicator = MainIndicatorType.ma)),
-            _buildIndicatorTab('EMA', _mainIndicator == MainIndicatorType.ema, () => setState(() => _mainIndicator = MainIndicatorType.ema)),
-            _buildIndicatorTab('BOLL', _mainIndicator == MainIndicatorType.boll, () => setState(() => _mainIndicator = MainIndicatorType.boll)),
+            _buildIndicatorTab('MA', _mainIndicator == MainIndicatorType.ma, () => _setMainIndicator(MainIndicatorType.ma)),
+            _buildIndicatorTab('EMA', _mainIndicator == MainIndicatorType.ema, () => _setMainIndicator(MainIndicatorType.ema)),
+            _buildIndicatorTab('BOLL', _mainIndicator == MainIndicatorType.boll, () => _setMainIndicator(MainIndicatorType.boll)),
             Container(width: 1, height: 16, color: AppColors.borderLight, margin: const EdgeInsets.symmetric(horizontal: 6)),
             // 副图指标
-            _buildIndicatorTab('VOL', _subIndicator == SubIndicatorType.vol, () => setState(() => _subIndicator = SubIndicatorType.vol)),
-            _buildIndicatorTab('MACD', _subIndicator == SubIndicatorType.macd, () => setState(() => _subIndicator = SubIndicatorType.macd)),
-            _buildIndicatorTab('KDJ', _subIndicator == SubIndicatorType.kdj, () => setState(() => _subIndicator = SubIndicatorType.kdj)),
-            _buildIndicatorTab('RSI', _subIndicator == SubIndicatorType.rsi, () => setState(() => _subIndicator = SubIndicatorType.rsi)),
-            _buildIndicatorTab('WR', _subIndicator == SubIndicatorType.wr, () => setState(() => _subIndicator = SubIndicatorType.wr)),
+            _buildIndicatorTab('VOL', _subIndicator == SubIndicatorType.vol, () => _setSubIndicator(SubIndicatorType.vol)),
+            _buildIndicatorTab('MACD', _subIndicator == SubIndicatorType.macd, () => _setSubIndicator(SubIndicatorType.macd)),
+            _buildIndicatorTab('KDJ', _subIndicator == SubIndicatorType.kdj, () => _setSubIndicator(SubIndicatorType.kdj)),
+            _buildIndicatorTab('RSI', _subIndicator == SubIndicatorType.rsi, () => _setSubIndicator(SubIndicatorType.rsi)),
+            _buildIndicatorTab('WR', _subIndicator == SubIndicatorType.wr, () => _setSubIndicator(SubIndicatorType.wr)),
             const SizedBox(width: 8),
             GestureDetector(
               onTap: () => _showSpeedDialog(),

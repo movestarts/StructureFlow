@@ -20,6 +20,7 @@ class ReplayEngine extends ChangeNotifier {
   // Current Display Data
   List<KlineModel> _completedKlines = [];
   KlineModel? _ghostBar;
+  List<KlineModel> _displayKlinesCache = const [];
   
   final DataService _dataService = DataService();
 
@@ -33,7 +34,7 @@ class ReplayEngine extends ChangeNotifier {
   }
 
   // Getters
-  List<KlineModel> get displayKlines => [..._completedKlines, if (_ghostBar != null) _ghostBar!];
+  List<KlineModel> get displayKlines => _displayKlinesCache;
   bool get isPlaying => _isPlaying;
   int get currentProgress => _currentIndex;
   int get totalLength => _endIndex;
@@ -80,6 +81,7 @@ class ReplayEngine extends ChangeNotifier {
     
     // Incremental update (O(1))
     _processTick(_sourceData[_currentIndex]);
+    _refreshDisplayCache();
     
     notifyListeners();
   }
@@ -111,6 +113,7 @@ class ReplayEngine extends ChangeNotifier {
     if (_currentIndex < 0) {
         _completedKlines = [];
         _ghostBar = null;
+        _refreshDisplayCache();
         return;
     }
 
@@ -122,6 +125,7 @@ class ReplayEngine extends ChangeNotifier {
     if (aggregated.isEmpty) {
         _completedKlines = [];
         _ghostBar = null;
+        _refreshDisplayCache();
         return;
     }
     
@@ -143,6 +147,7 @@ class ReplayEngine extends ChangeNotifier {
       _completedKlines = [];
       _ghostBar = null;
     }
+    _refreshDisplayCache();
   }
   
   /// Incremental Update: Absorbs one new source tick.
@@ -166,6 +171,17 @@ class ReplayEngine extends ChangeNotifier {
       // New ghost bar starts with this tick
       _ghostBar = tick;
     }
+  }
+
+  void _refreshDisplayCache() {
+    if (_ghostBar == null) {
+      _displayKlinesCache = List.unmodifiable(_completedKlines);
+      return;
+    }
+    _displayKlinesCache = List.unmodifiable([
+      ..._completedKlines,
+      _ghostBar!,
+    ]);
   }
   
   /// Jump to the next completed bar (skips intra-bar ticks)

@@ -129,7 +129,17 @@ class SubChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant SubChartPainter old) => true;
+  bool shouldRepaint(covariant SubChartPainter old) {
+    return old.label != label ||
+        old.lines != lines ||
+        old.dataLength != dataLength ||
+        old.fixedMin != fixedMin ||
+        old.fixedMax != fixedMax ||
+        old.showZeroLine != showZeroLine ||
+        old.viewController.visibleStartIndex != viewController.visibleStartIndex ||
+        old.viewController.visibleEndIndex != viewController.visibleEndIndex ||
+        old.viewController.step != viewController.step;
+  }
 }
 
 /// 线数据
