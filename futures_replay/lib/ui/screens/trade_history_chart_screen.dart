@@ -19,9 +19,9 @@ enum _SubIndicator { vol, macd, kdj, rsi, wr }
 
 /// 交易历史 K线回看页面
 class TradeHistoryChartScreen extends StatefulWidget {
-  final TradeRecord trade;
+  final List<TradeRecord> sessionTrades;
 
-  const TradeHistoryChartScreen({super.key, required this.trade});
+  const TradeHistoryChartScreen({super.key, required this.sessionTrades});
 
   @override
   State<TradeHistoryChartScreen> createState() => _TradeHistoryChartScreenState();
@@ -54,19 +54,17 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
 
   /// 构建虚拟的 Trade 对象用于在图表上显示买卖标记
   List<Trade> get _fakeTrades {
-    return [
-      Trade(
-        id: '${widget.trade.id}_entry',
-        entryTime: widget.trade.entryTime,
-        entryPrice: widget.trade.entryPrice,
-        direction: widget.trade.isLong ? Direction.long : Direction.short,
-        quantity: widget.trade.quantity,
-        leverage: widget.trade.leverage,
+    return widget.sessionTrades.map((t) => Trade(
+        id: '${t.id}_entry',
+        entryTime: t.entryTime,
+        entryPrice: t.entryPrice,
+        direction: t.isLong ? Direction.long : Direction.short,
+        quantity: t.quantity,
+        leverage: t.leverage,
         isOpen: false,
-        closePrice: widget.trade.closePrice,
-        closeTime: widget.trade.closeTime,
-      ),
-    ];
+        closePrice: t.closePrice,
+        closeTime: t.closeTime,
+      )).toList();
   }
 
   @override
@@ -83,18 +81,25 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
 
   Future<void> _loadData() async {
     try {
-      if (widget.trade.csvPath == null || widget.trade.csvPath!.isEmpty) {
-      final timeStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(widget.trade.trainingTime);
-      setState(() { 
-        _error = '该交易记录未关联有效数据文件\n(训练时间: $timeStr)\n\n可能是历史版本生成的记录，或缓存写入失败。'; 
-        _isLoading = false; 
-      });
-      return;
-    }
+      if (widget.sessionTrades.isEmpty) {
+         setState(() { _error = '没有交易记录'; _isLoading = false; });
+         return;
+      }
+      
+      final firstTrade = widget.sessionTrades.first;
+      
+      if (firstTrade.csvPath == null || firstTrade.csvPath!.isEmpty) {
+        final timeStr = DateFormat('yyyy-MM-dd HH:mm:ss').format(firstTrade.trainingTime);
+        setState(() { 
+          _error = '该交易记录未关联有效数据文件\n(训练时间: $timeStr)\n\n可能是历史版本生成的记录，或缓存写入失败。'; 
+          _isLoading = false; 
+        });
+        return;
+      }
 
-      final file = File(widget.trade.csvPath!);
+      final file = File(firstTrade.csvPath!);
       if (!await file.exists()) {
-        setState(() { _error = '数据文件不存在:\n${widget.trade.csvPath}'; _isLoading = false; });
+        setState(() { _error = '数据文件不存在:\n${firstTrade.csvPath}'; _isLoading = false; });
         return;
       }
 
@@ -124,20 +129,9 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
         return;
       }
 
-      // 如果有startIndex和visibleBars信息，截取相关范围
-      int startIdx = 0;
-      if (widget.trade.startIndex != null) {
-        startIdx = widget.trade.startIndex!.clamp(0, klines.length - 1);
-      }
-      int endIdx = klines.length;
-      if (widget.trade.visibleBars != null && startIdx + widget.trade.visibleBars! < klines.length) {
-        endIdx = startIdx + widget.trade.visibleBars!;
-      }
-
-      final displayData = klines.sublist(startIdx, endIdx.clamp(startIdx, klines.length));
-
+      // Load FULL data for the session review
       setState(() {
-        _allData = displayData;
+        _allData = klines;
         _isLoading = false;
         _updateIndicators();
       });
@@ -162,7 +156,9 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final title = 'K线训练营 - ${widget.trade.instrumentCode} 历史记录';
+    if (widget.sessionTrades.isEmpty) return const SizedBox();
+    final firstTrade = widget.sessionTrades.first;
+    final title = 'K线训练营 - ${firstTrade.instrumentCode} 历史记录';
     return Scaffold(
       backgroundColor: AppColors.bgDark,
       appBar: AppBar(
@@ -226,11 +222,12 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
   Widget _buildMainChart() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (!_isInitialized && _allData.isNotEmpty) {
+        if (!_isInitialized && _allData.isNotEmpty && widget.sessionTrades.isNotEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             // Find the index of the trade close time
             int targetIndex = _allData.length - 1;
-            final closeTime = widget.trade.closeTime;
+            final lastTrade = widget.sessionTrades.last;
+            final closeTime = lastTrade.closeTime;
             
             // Search for the close time index
             for (int i = 0; i < _allData.length; i++) {

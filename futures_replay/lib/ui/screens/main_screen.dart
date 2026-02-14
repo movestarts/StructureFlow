@@ -430,7 +430,7 @@ class _MainScreenState extends State<MainScreen> {
                 _chartController.initialize(
                   constraints.maxWidth,
                   replay.displayKlines.length,
-                  replay.displayKlines.length - 1,
+                  replay.displayKlines.length, // Fix: Use length to include the last item (sublist end is exclusive)
                 );
                 setState(() => _isInitialized = true);
               });
@@ -670,13 +670,11 @@ class _MainScreenState extends State<MainScreen> {
                     ),
                   if (!widget.spotOnly) const SizedBox(width: 8),
                   // 平仓按钮
-                  SizedBox(
-                    width: 56,
+                  Expanded(
                     child: _buildTradeButton(
                       '平仓',
-                      hasPosition ? AppColors.warning : AppColors.bgSurface,
+                      hasPosition ? AppColors.warning : AppColors.textSecondary,
                       hasPosition ? () => trade.closeAll(price, time) : null,
-                      small: true,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -701,11 +699,11 @@ class _MainScreenState extends State<MainScreen> {
                     replay.canUndo ? () => replay.undo() : null,
                   ),
                   const SizedBox(width: 8),
-                  // 观望（下一根K线）
+                  // 观望（步进）
                   _buildControlButton(
                     '观望',
                     Icons.skip_next,
-                    replay.isFinished ? null : () => replay.nextBar(),
+                    replay.isFinished ? null : () => replay.next(),
                   ),
                 ],
               ),

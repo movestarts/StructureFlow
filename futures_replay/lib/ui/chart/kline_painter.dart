@@ -257,7 +257,9 @@ class KlinePainter extends CustomPainter {
 
     for (var trade in allTrades) {
       // 1. Draw Entry Marker
-      final entryIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isAfter(trade.entryTime));
+      // Fix: Use lastIndexWhere to find the bar that STARTED before or at the trade time.
+      // This handles intra-bar times correctly (e.g. Trade 10:15 matches Bar 10:00, not Bar 10:30)
+      final entryIdx = allData.lastIndexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isBefore(trade.entryTime));
       
       if (entryIdx >= startIdx && entryIdx < endIdx) {
         final kline = allData[entryIdx];
@@ -273,18 +275,20 @@ class KlinePainter extends CustomPainter {
 
       // 2. Draw Exit Marker
       if (!trade.isOpen && trade.closeTime != null) {
-        final closeIdx = allData.indexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime!) || k.time.isAfter(trade.closeTime!));
+        final closeIdx = allData.lastIndexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime!) || k.time.isBefore(trade.closeTime!));
         
         if (closeIdx >= startIdx && closeIdx < endIdx) {
            final kline = allData[closeIdx];
            final visibleIdx = closeIdx - startIdx;
            final x = visibleIdx * step + step / 2;
            
-           // Long Exit = SELL, Short Exit = BUY
-           final isBuy = trade.direction != Direction.long;
-           final y = isBuy ? getY(kline.low) : getY(kline.high);
+           // Long Exit = SELL (to close), Short Exit = BUY (to close)
+           final isLongTrade = trade.direction == Direction.long;
+           final isBuyAction = !isLongTrade; // Exit Long -> Sell (false), Exit Short -> Buy (true)
            
-           _drawMarkerBadge(canvas, x, y, isBuy, isBuy ? "BUY" : "SELL", false);
+           final y = isBuyAction ? getY(kline.low) : getY(kline.high);
+           
+           _drawMarkerBadge(canvas, x, y, isBuyAction, "CLOSE", false);
         }
       }
     }

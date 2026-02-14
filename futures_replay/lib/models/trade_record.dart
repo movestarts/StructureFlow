@@ -84,4 +84,36 @@ class TradeRecord {
       visibleBars: json['visibleBars'] as int?,
     );
   }
+
+  // 这里的格式化最好在 Model 外部处理或统一，但为了方便 CSV 导出，直接在此实现
+  // 注意：需要确保调用此方法前 DateFormat 可用，这里简单处理
+  List<dynamic> toCsvRow() {
+    // 简单格式化，避免引入 intl 依赖如果未引入 (虽然项目有 intl)
+    // 格式：yyyy-MM-dd HH:mm
+    String fmt(DateTime dt) {
+      final y = dt.year;
+      final m = dt.month.toString().padLeft(2, '0');
+      final d = dt.day.toString().padLeft(2, '0');
+      final h = dt.hour.toString().padLeft(2, '0');
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$y-$m-$d $h:$min';
+    }
+
+    return [
+      id,
+      instrumentCode,
+      direction, // Long/Short
+      fmt(entryTime),
+      fmt(closeTime),
+      entryPrice,
+      closePrice,
+      pnl,
+      pnlPercent,
+      quantity,
+      '', // Setup_Pattern
+      '', // Trend_Context
+      '', // Mistake_Tag
+      '', // Strategy_Notes
+    ];
+  }
 }

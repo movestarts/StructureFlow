@@ -1,10 +1,18 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:csv/csv.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import '../theme/app_theme.dart';
+import '../../models/kline_model.dart';
 import '../../services/account_service.dart';
 import '../../models/trade_record.dart';
 import 'trade_history_chart_screen.dart';
+import 'session_detail_screen.dart';
 
 /// 交易历史记录页面
 class TradeHistoryScreen extends StatefulWidget {
@@ -16,6 +24,8 @@ class TradeHistoryScreen extends StatefulWidget {
 
 class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
   int _tabIndex = 0; // 0=每个仓位, 1=每日
+  bool _isSelectionMode = false;
+  final Set<String> _selectedIds = {};
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _cardBg => _isDark ? AppColors.bgCard : Colors.white;
@@ -28,6 +38,192 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
 
   final _dateFmt = DateFormat('yyyy-MM-dd HH:mm');
 
+  void _toggleSelectionMode() {
+    setState(() {
+      _isSelectionMode = !_isSelectionMode;
+      _selectedIds.clear();
+      if (_isSelectionMode) _tabIndex = 0; // Force to item view
+    });
+  }
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _selectAll(List<TradeRecord> trades) {
+    setState(() {
+      if (_selectedIds.length == trades.length) {
+        _selectedIds.clear();
+      } else {
+        _selectedIds.addAll(trades.map((t) => t.id));
+      }
+    });
+  }
+
+  Future<void> _exportData(List<TradeRecord> data) async {
+    if (data.isEmpty) return;
+    
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final List<List<dynamic>> rows = [];
+      
+      // Header matching AI analysis needs
+      final header = [
+        // Trade Metadata
+        'Trade_ID', 'Symbol', 'Direction', 'Entry_Time', 'Close_Time',
+        'Entry_Price', 'Exit_Price', 'PnL', 'PnL_Percent', 'Quantity', 
+        'Setup_Pattern', 'Trend_Context', 'Mistake_Tag', 'Strategy_Notes',
+        // Candle Data
+        'Bar_Time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Bar_Type' 
+      ];
+      rows.add(header);
+
+      final dateFmt = DateFormat('yyyy-MM-dd HH:mm');
+
+      for (var trade in data) {
+        // Trade metadata common for all rows of this trade
+        final meta = [
+          trade.id,
+          trade.instrumentCode,
+          trade.direction,
+          dateFmt.format(trade.entryTime),
+          dateFmt.format(trade.closeTime),
+          trade.entryPrice,
+          trade.closePrice,
+          trade.pnl,
+          trade.pnlPercent,
+          trade.quantity,
+          '', '', '', '' // Empty AI fields
+        ];
+
+        // 1. Try to load K-line data
+        List<KlineModel> klines = [];
+        if (trade.csvPath != null && trade.csvPath!.isNotEmpty) {
+          final file = File(trade.csvPath!);
+          if (await file.exists()) {
+             try {
+               final bytes = await file.readAsBytes();
+               String content;
+               try {
+                 content = utf8.decode(bytes);
+               } catch (_) {
+                 content = latin1.decode(bytes);
+               }
+               
+               final csvRows = const CsvToListConverter(eol: '\n').convert(content);
+               for (int i = 0; i < csvRows.length; i++) {
+                 var row = csvRows[i];
+                 if (row.isEmpty) continue;
+                 // Skip header if present (check if first col is double)
+                 if (i == 0) {
+                   try { double.parse(row[1].toString()); } catch (_) { continue; }
+                 }
+                 try {
+                   klines.add(KlineModel.fromList(row));
+                 } catch (_) {}
+               }
+             } catch (e) {
+               debugPrint('Error reading kline for trade ${trade.id}: $e');
+             }
+          }
+        }
+
+        if (klines.isNotEmpty) {
+           // 2. Find range [Entry - 100, Close]
+           int entryIdx = klines.indexWhere((k) => k.time.isAtSameMomentAs(trade.entryTime) || k.time.isAfter(trade.entryTime));
+           if (entryIdx == -1) entryIdx = klines.length - 1;
+
+           int startIdx = (entryIdx - 100).clamp(0, klines.length - 1);
+           
+           int closeIdx = klines.indexWhere((k) => k.time.isAtSameMomentAs(trade.closeTime) || k.time.isAfter(trade.closeTime));
+           if (closeIdx == -1) closeIdx = klines.length - 1;
+           
+           // Ensure closeIdx covers the trade duration
+           if (closeIdx < startIdx) closeIdx = klines.length - 1;
+
+           // 3. Generate rows
+           for (int i = startIdx; i <= closeIdx; i++) {
+             final k = klines[i];
+             String barType = 'Context';
+             if (i >= entryIdx && i <= closeIdx) barType = 'Active';
+             
+             final row = List.from(meta)
+               ..addAll([
+                 dateFmt.format(k.time),
+                 k.open,
+                 k.high,
+                 k.low,
+                 k.close,
+                 k.volume,
+                 barType
+               ]);
+             rows.add(row);
+           }
+        } else {
+          // Fallback: If no Kline data, just add one row with empty candle data
+           final row = List.from(meta)..addAll(['', '', '', '', '', '', 'No_Data']);
+           rows.add(row);
+        }
+      }
+      
+      final csvData = const ListToCsvConverter().convert(rows);
+      // Add BOM for Excel compatibility
+      final csvContent = '\uFEFF$csvData';
+      
+      // Hide loading
+      if (mounted) Navigator.pop(context);
+
+      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        String? outputFile = await FilePicker.platform.saveFile(
+          dialogTitle: '保存 CSV 文件 (含K线数据)',
+          fileName: 'trade_history_full_${DateFormat('MMdd_HHmm').format(DateTime.now())}.csv',
+          type: FileType.custom,
+          allowedExtensions: ['csv'],
+        );
+
+        if (outputFile != null) {
+          if (!outputFile.toLowerCase().endsWith('.csv')) {
+             outputFile = '$outputFile.csv';
+          }
+          final file = File(outputFile);
+          await file.writeAsString(csvContent);
+          
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已保存到: $outputFile')));
+          }
+        }
+      } else {
+        // Mobile: Use Share Sheet
+        final dir = await getTemporaryDirectory();
+        final path = '${dir.path}/trade_history.csv';
+        final file = File(path);
+        await file.writeAsString(csvContent);
+        
+        await Share.shareXFiles([XFile(path)], text: 'Exported Trade History with K-line Data');
+      }
+      
+      if (_isSelectionMode) _toggleSelectionMode();
+
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Hide loading
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导出失败: $e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<AccountService>(
@@ -36,30 +232,57 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
           appBar: AppBar(
             backgroundColor: _cardBg,
             elevation: 0,
-            leading: IconButton(
-              icon: Icon(Icons.arrow_back, color: _textPrimary),
-              onPressed: () => Navigator.pop(context),
+            leading: _isSelectionMode
+                ? IconButton(
+                    icon: Icon(Icons.close, color: _textPrimary),
+                    onPressed: _toggleSelectionMode,
+                  )
+                : IconButton(
+                    icon: Icon(Icons.arrow_back, color: _textPrimary),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+            title: Text(
+              _isSelectionMode ? '已选择 ${_selectedIds.length} 项' : '交易历史记录',
+              style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            title: Text('交易历史记录', style: TextStyle(color: _textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
             centerTitle: true,
             actions: [
-              IconButton(
-                icon: Icon(Icons.delete_outline, color: _textMuted),
-                onPressed: () => _showClearConfirm(account),
-              ),
+              if (_isSelectionMode)
+                TextButton(
+                  onPressed: () => _selectAll(account.tradeHistory),
+                  child: Text(
+                    _selectedIds.length == account.tradeHistory.length ? '取消全选' : '全选',
+                    style: const TextStyle(color: AppColors.primary, fontSize: 16),
+                  ),
+                )
+              else ...[
+                PopupMenuButton<String>(
+                  icon: Icon(Icons.ios_share, color: _textPrimary), 
+                  onSelected: (val) {
+                    if (val == 'select') _toggleSelectionMode();
+                    if (val == 'export_all') _exportData(account.tradeHistory);
+                  },
+                  itemBuilder: (ctx) => [
+                    PopupMenuItem(value: 'select', child: Text('进入选择模式', style: TextStyle(color: _textPrimary))),
+                    PopupMenuItem(value: 'export_all', child: Text('导出全部数据', style: TextStyle(color: _textPrimary))),
+                  ],
+                  color: _cardBg,
+                ),
+                IconButton(
+                  icon: Icon(Icons.delete_outline, color: _textMuted),
+                  onPressed: () => _showClearConfirm(account),
+                ),
+              ],
             ],
           ),
           body: Column(
             children: [
-              // 顶部统计卡片
-              _buildStatsCard(account),
-              const SizedBox(height: 12),
-
-              // Tab 切换
-              _buildTabBar(),
-              const SizedBox(height: 12),
-
-              // 列表
+              if (!_isSelectionMode) ...[
+                _buildStatsCard(account),
+                const SizedBox(height: 12),
+                _buildTabBar(),
+                const SizedBox(height: 12),
+              ],
               Expanded(
                 child: _tabIndex == 0
                     ? _buildPositionList(account)
@@ -67,6 +290,25 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
               ),
             ],
           ),
+          bottomNavigationBar: _isSelectionMode
+              ? BottomAppBar(
+                  color: _cardBg,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: ElevatedButton(
+                      onPressed: _selectedIds.isEmpty ? null : () {
+                         final selected = account.tradeHistory.where((t) => _selectedIds.contains(t.id)).toList();
+                         _exportData(selected);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        disabledBackgroundColor: _textMuted.withOpacity(0.3),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: Text('导出选中 (${_selectedIds.length})', style: const TextStyle(color: Colors.white, fontSize: 16)),
+                    ),
+                )
+              : null,
         );
       },
     );
@@ -136,7 +378,7 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
         children: [
           _buildTab('每个仓位', 0),
           const SizedBox(width: 8),
-          _buildTab('每 日', 1),
+          _buildTab('每一局', 1),
           const Spacer(),
         ],
       ),
@@ -193,11 +435,11 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
   }
 
   Widget _buildTradeCard(TradeRecord trade) {
+    // ... existing implementation but update _viewChart call
     final pnlColor = trade.pnl >= 0 ? AppColors.bullish : AppColors.bearish;
     final pnlSign = trade.pnl >= 0 ? '+' : '';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+    final content = Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: _cardBg,
@@ -208,10 +450,8 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 顶部: 品种 + 标签 + 盈亏
           Row(
             children: [
-              // 头像
               Container(
                 width: 36, height: 36,
                 decoration: BoxDecoration(
@@ -261,7 +501,6 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
           Divider(height: 1, color: _dividerClr),
           const SizedBox(height: 14),
 
-          // 详情表格
           Row(
             children: [
               Expanded(child: _buildDetailItem('仓位', trade.quantity.toStringAsFixed(4))),
@@ -286,9 +525,8 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
           _buildDetailItem('训练时间', _dateFmt.format(trade.trainingTime)),
           const SizedBox(height: 14),
 
-          // 查看K线按钮
           InkWell(
-            onTap: () => _viewChart(trade),
+            onTap: () => _viewChart([trade]),
             borderRadius: BorderRadius.circular(6),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -305,6 +543,43 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
         ],
       ),
     );
+
+    if (_isSelectionMode) {
+      final isSelected = _selectedIds.contains(trade.id);
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: InkWell(
+          onTap: () => _toggleSelection(trade.id),
+          borderRadius: BorderRadius.circular(14),
+          child: Row(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Checkbox(
+                  value: isSelected,
+                  onChanged: (v) => _toggleSelection(trade.id),
+                  activeColor: AppColors.primary,
+                  side: BorderSide(color: _textMuted),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                ),
+              ),
+              Expanded(child: IgnorePointer(child: content)),
+            ],
+          ),
+        ),
+      );
+    } else {
+      return GestureDetector(
+        onLongPress: () {
+          _toggleSelectionMode();
+          _toggleSelection(trade.id);
+        },
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: content
+        ),
+      );
+    }
   }
 
   Widget _buildTag(String label, Color color) {
@@ -327,18 +602,17 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
     );
   }
 
-  // 每日汇总
+  // 每一局汇总 (Expandable List)
   Widget _buildDailyList(AccountService account) {
     final trades = account.tradeHistory;
     if (trades.isEmpty) {
       return Center(child: Text('暂无交易记录', style: TextStyle(color: _textMuted, fontSize: 16)));
     }
 
-    // 按训练日期分组
+    // Group by Training Time (Session)
     final Map<String, List<TradeRecord>> grouped = {};
-    final dayFmt = DateFormat('yyyy-MM-dd');
     for (final t in trades) {
-      final key = dayFmt.format(t.trainingTime);
+      final key = t.trainingTime.toIso8601String();
       grouped.putIfAbsent(key, () => []);
       grouped[key]!.add(t);
     }
@@ -350,60 +624,184 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: sortedKeys.length,
       itemBuilder: (_, i) {
-        final date = sortedKeys[i];
-        final dayTrades = grouped[date]!;
-        final dayPnL = dayTrades.fold(0.0, (sum, t) => sum + t.pnl);
-        final dayWins = dayTrades.where((t) => t.isWin).length;
-        final dayPnlColor = dayPnL >= 0 ? AppColors.bullish : AppColors.bearish;
+        final key = sortedKeys[i];
+        final sessionTrades = grouped[key]!;
+        
+        return _buildSessionCard(sessionTrades);
+      },
+    );
+  }
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _cardBg,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(_isDark ? 0.12 : 0.03), blurRadius: 8, offset: const Offset(0, 2))],
-            border: _isDark ? Border.all(color: AppColors.borderLight, width: 0.5) : null,
-          ),
-          child: Row(
+  Widget _buildSessionCard(List<TradeRecord> sessionTrades) {
+    final firstTrade = sessionTrades.first;
+    
+    // Calculate Session Stats
+    final totalPnL = sessionTrades.fold(0.0, (sum, t) => sum + t.pnl);
+    final wins = sessionTrades.where((t) => t.isWin).length;
+    final winRate = sessionTrades.isEmpty ? 0.0 : (wins / sessionTrades.length * 100);
+    final pnlColor = totalPnL >= 0 ? AppColors.bullish : AppColors.bearish; // Using theme colors
+    
+    // Time calculations
+    DateTime startTime = sessionTrades.first.entryTime;
+    DateTime endTime = sessionTrades.first.closeTime;
+    for (var t in sessionTrades) {
+      if (t.entryTime.isBefore(startTime)) startTime = t.entryTime;
+      if (t.closeTime.isAfter(endTime)) endTime = t.closeTime;
+    }
+    final duration = endTime.difference(startTime);
+    final durationStr = duration.inHours > 0 
+        ? '${duration.inHours}小时${duration.inMinutes.remainder(60)}分钟' 
+        : '${duration.inMinutes}分钟';
+
+    // Sort trades by entry time
+    final sortedTrades = List<TradeRecord>.from(sessionTrades)..sort((a, b) => a.entryTime.compareTo(b.entryTime));
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(_isDark ? 0.12 : 0.03), blurRadius: 8, offset: const Offset(0, 2))],
+        border: _isDark ? Border.all(color: AppColors.borderLight, width: 0.5) : null,
+      ),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.all(16),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          // Header (Summary Card)
+          title: Row(
             children: [
               Container(
-                width: 40, height: 40,
-                decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
-                child: Center(child: Text('${i + 1}', style: TextStyle(color: AppColors.primary, fontSize: 16, fontWeight: FontWeight.bold))),
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.insert_chart, color: AppColors.primary, size: 24),
               ),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(date, style: TextStyle(color: _textPrimary, fontSize: 15, fontWeight: FontWeight.w600)),
+                    Row(
+                      children: [
+                        Text(firstTrade.instrumentCode, style: TextStyle(color: _textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+                        const SizedBox(width: 8),
+                        _buildTag(firstTrade.type == 'spot' ? '现货' : '合约', Colors.purple),
+                      ],
+                    ),
                     const SizedBox(height: 4),
-                    Text('${dayTrades.length}笔交易 · 胜${dayWins}负${dayTrades.length - dayWins}', style: TextStyle(color: _textSecondary, fontSize: 12)),
+                    Text(
+                      '训练时间: ${_dateFmt.format(firstTrade.trainingTime)}', 
+                      style: TextStyle(color: _textSecondary, fontSize: 12)
+                    ),
                   ],
                 ),
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                   Text(
+                    '${totalPnL >= 0 ? "+" : ""}${totalPnL.toStringAsFixed(2)}',
+                    style: TextStyle(color: pnlColor, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 2),
                   Text(
-                    '${dayPnL >= 0 ? "+" : ""}${dayPnL.toStringAsFixed(2)}',
-                    style: TextStyle(color: dayPnlColor, fontSize: 16, fontWeight: FontWeight.bold),
+                    '${winRate.toStringAsFixed(2)}%',
+                    style: TextStyle(color: winRate >= 50 ? AppColors.success : _textSecondary, fontSize: 12),
                   ),
                 ],
               ),
             ],
           ),
-        );
-      },
+          // Expanded Content (Details)
+          children: [
+             Divider(color: _dividerClr, height: 24),
+             
+             // Detailed Stats Grid
+             Row(
+               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+               children: [
+                 _buildDetailItem('开始', _dateFmt.format(startTime)),
+                 _buildDetailItem('结束', _dateFmt.format(endTime), alignment: CrossAxisAlignment.end),
+               ],
+             ),
+             const SizedBox(height: 12),
+             Row(
+               mainAxisAlignment: MainAxisAlignment.spaceBetween,
+               children: [
+                 _buildDetailItem('时间跨度', durationStr),
+                 _buildDetailItem('战绩统计', '$wins胜 / ${sessionTrades.length - wins}负', alignment: CrossAxisAlignment.end),
+               ],
+             ),
+             const SizedBox(height: 12),
+             Align(
+                alignment: Alignment.centerRight,
+                child: Text('总成交/胜率: ${sessionTrades.length}笔 / ${winRate.toStringAsFixed(1)}%', style: TextStyle(color: _textSecondary, fontSize: 12)),
+             ),
+             
+             const SizedBox(height: 20),
+             Align(
+               alignment: Alignment.centerLeft,
+               child: Text('交易明细 (${sessionTrades.length}笔)', style: TextStyle(color: _textMuted, fontSize: 13)),
+             ),
+             const SizedBox(height: 10),
+             
+             // Trade List
+             ...sortedTrades.map((trade) {
+                final tPnlColor = trade.pnl >= 0 ? AppColors.bullish : AppColors.bearish;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: _surfaceClr,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      _buildTag(trade.direction == 'long' ? '多' : '空', trade.isLong ? AppColors.bullish : AppColors.bearish),
+                      const SizedBox(width: 12),
+                      Text('${trade.entryPrice.toStringAsFixed(1)} → ${trade.closePrice.toStringAsFixed(1)}', 
+                           style: TextStyle(color: _textSecondary, fontSize: 14)),
+                      const Spacer(),
+                      Text('${trade.pnl >= 0 ? "+" : ""}${trade.pnl.toStringAsFixed(2)}', 
+                           style: TextStyle(color: tPnlColor, fontSize: 15, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                );
+             }),
+             
+             const SizedBox(height: 16),
+             
+             // Review Button
+             Align(
+               alignment: Alignment.centerRight,
+               child: ElevatedButton.icon(
+                 onPressed: () => _viewChart(sessionTrades),
+                 icon: const Icon(Icons.history, size: 18),
+                 label: const Text('回顾整局走势'),
+                 style: ElevatedButton.styleFrom(
+                   backgroundColor: AppColors.primary.withOpacity(0.1),
+                   foregroundColor: AppColors.primary,
+                   elevation: 0,
+                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                 ),
+               ),
+             ),
+          ],
+        ),
+      ),
     );
   }
 
-  void _viewChart(TradeRecord trade) {
+  void _viewChart(List<TradeRecord> trades) {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => TradeHistoryChartScreen(trade: trade),
+        builder: (_) => TradeHistoryChartScreen(sessionTrades: trades),
       ),
     );
   }
