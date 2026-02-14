@@ -122,10 +122,15 @@ class _SetupScreenState extends State<SetupScreen> {
     }
   }
 
+
   Future<void> _loadData(String path) async {
     try {
       final service = DataService();
-      final data = await service.loadFromCsv(path);
+      // Use filename (without extension) as cache key
+      final fileName = path.split(Platform.pathSeparator).last;
+      final symbol = fileName.replaceAll('.csv', '');
+      
+      final data = await service.loadWithCache(path, symbol);
 
       if (mounted) {
         setState(() {
@@ -145,6 +150,7 @@ class _SetupScreenState extends State<SetupScreen> {
       }
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
