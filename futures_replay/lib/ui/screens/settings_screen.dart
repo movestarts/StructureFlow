@@ -5,6 +5,7 @@ import '../../services/settings_service.dart';
 import 'global_settings_screen.dart';
 import 'shortcut_settings_screen.dart';
 import 'import_data_screen.dart';
+import 'delete_data_screen.dart';
 
 /// 设置页面 - 自适应浅色/深色主题
 class SettingsScreen extends StatelessWidget {
@@ -95,7 +96,9 @@ class SettingsScreen extends StatelessWidget {
                 _SettingsItem(icon: Icons.upload, iconBg: const Color(0xFF10B981), title: '导入数据', subtitle: '导入本地CSV', onTap: () {
                   Navigator.push(context, MaterialPageRoute(builder: (_) => const ImportDataScreen()));
                 }),
-                _SettingsItem(icon: Icons.delete_outline, iconBg: const Color(0xFFEF4444), title: '删除数据'),
+                _SettingsItem(icon: Icons.delete_outline, iconBg: const Color(0xFFEF4444), title: '删除数据', onTap: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const DeleteDataScreen()));
+                }),
               ]),
               const SizedBox(height: 24),
 
