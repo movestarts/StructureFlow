@@ -293,10 +293,10 @@ class _MainScreenState extends State<MainScreen> {
               _buildTopBar(),
               // 主图
               Expanded(flex: 5, child: _buildMainChart()),
+              // 时间轴（移动到主图和副图之间）
+              _buildTimeAxis(),
               // 副图 (VOL / MACD / KDJ / RSI / WR)
               Expanded(flex: 2, child: _buildSubChart()),
-              // 时间轴
-              _buildTimeAxis(),
               // 指标切换栏
               _buildIndicatorTabs(),
               // 底部操作面板
@@ -605,13 +605,30 @@ class _MainScreenState extends State<MainScreen> {
 
   // ===== 时间轴 =====
   Widget _buildTimeAxis() {
-    return Consumer<ReplayEngine>(
-      builder: (ctx, replay, _) {
+    return Consumer2<ReplayEngine, ChartViewController>(
+      builder: (ctx, replay, chartCtrl, _) {
         final klines = replay.displayKlines;
         if (klines.isEmpty) return const SizedBox(height: 16);
 
-        final first = klines.first.time;
-        final last = klines.last.time;
+        final dataLen = klines.length;
+        int startIdx = chartCtrl.visibleStartIndex.clamp(0, dataLen);
+        int endIdx = chartCtrl.visibleEndIndex.clamp(0, dataLen);
+        if (startIdx >= endIdx) {
+          startIdx = 0;
+          endIdx = dataLen;
+        }
+        final visibleCount = endIdx - startIdx;
+
+        final width = MediaQuery.of(context).size.width;
+        final tickCount = width < 360 ? 3 : (width < 600 ? 4 : 5);
+        final fmt = DateFormat('MM-dd HH:mm');
+        final labels = List<String>.generate(tickCount, (i) {
+          if (visibleCount <= 1) return fmt.format(klines[startIdx].time);
+          final t = i / (tickCount - 1);
+          final idx = (startIdx + (t * (visibleCount - 1)).round())
+              .clamp(startIdx, endIdx - 1);
+          return fmt.format(klines[idx].time);
+        });
 
         return Container(
           height: 20,
@@ -619,10 +636,17 @@ class _MainScreenState extends State<MainScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(DateFormat('MM-dd HH:mm').format(first), style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
-              Text(DateFormat('MM-dd HH:mm').format(last), style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
-            ],
+            children: labels
+                .map(
+                  (text) => Text(
+                    text,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 10,
+                    ),
+                  ),
+                )
+                .toList(),
           ),
         );
       },

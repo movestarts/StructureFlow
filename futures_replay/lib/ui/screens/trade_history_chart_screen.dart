@@ -281,10 +281,10 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
         children: [
           // 主图
           Expanded(flex: 5, child: _buildMainChart()),
-          // 副图
-          Expanded(flex: 2, child: _buildSubChart()),
           // 时间轴
           _buildTimeAxis(),
+          // 副图
+          Expanded(flex: 2, child: _buildSubChart()),
           // 指标切换栏
           _buildIndicatorTabs(),
         ],
@@ -364,6 +364,7 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
     );
   }
 
+
   Widget _buildSubChart() {
     return ListenableBuilder(
       listenable: _chartController,
@@ -433,18 +434,14 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
           return const SizedBox(height: 20);
         }
 
-        int startIdx = _chartController.visibleStartIndex.clamp(0, _allData.length);
-        int endIdx = _chartController.visibleEndIndex.clamp(0, _allData.length);
+        int startIdx = _chartController.visibleStartIndex.clamp(0, _allData.length - 1);
+        int endIdx = _chartController.visibleEndIndex.clamp(0, _allData.length - 1);
         if (startIdx >= endIdx) return const SizedBox(height: 20);
 
-        final dateFormat = DateFormat('MM-dd HH:mm');
-        final step = _chartController.step;
-        const priceAxisWidth = 60.0;
-        final plotWidth = MediaQuery.of(context).size.width - priceAxisWidth;
-        final interval = ((endIdx - startIdx) / 3).ceil();
+        final plotWidth = MediaQuery.of(context).size.width - 60.0; // Subtract price axis width
 
         return Container(
-          height: 20,
+          height: 24, // Slightly increased height
           color: AppColors.bgOverlay,
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: CustomPaint(
@@ -452,10 +449,8 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
               data: _allData,
               startIdx: startIdx,
               endIdx: endIdx,
-              step: step,
+              step: _chartController.step,
               plotWidth: plotWidth,
-              interval: interval,
-              dateFormat: dateFormat,
             ),
           ),
         );
@@ -624,8 +619,6 @@ class _TimeAxisPainter extends CustomPainter {
   final int endIdx;
   final double step;
   final double plotWidth;
-  final int interval;
-  final DateFormat dateFormat;
 
   _TimeAxisPainter({
     required this.data,
@@ -633,27 +626,69 @@ class _TimeAxisPainter extends CustomPainter {
     required this.endIdx,
     required this.step,
     required this.plotWidth,
-    required this.interval,
-    required this.dateFormat,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (data.isEmpty || startIdx >= endIdx) return;
+    
     final tp = TextPainter(textDirection: TextDirection.ltr);
-    for (int i = startIdx; i < endIdx; i += interval) {
-      if (i < 0 || i >= data.length) continue;
-      final x = (i - startIdx) * step + step / 2;
-      if (x < 0 || x > plotWidth) continue;
-
-      tp.text = TextSpan(
-        text: dateFormat.format(data[i].time),
-        style: const TextStyle(color: AppColors.textMuted, fontSize: 10),
-      );
-      tp.layout();
-      tp.paint(canvas, Offset(x - tp.width / 2, 2));
+    
+    // Define the 3 key positions: Start, Middle, End
+    // Calculate accurate indices
+    final count = endIdx - startIdx;
+    final middleIdx = startIdx + (count ~/ 2);
+    
+    final indices = [startIdx, middleIdx, endIdx];
+    
+    for (int i = 0; i < indices.length; i++) {
+        final idx = indices[i];
+        if (idx < 0 || idx >= data.length) continue;
+        
+        // Calculate X position
+        // Matches chart logic: (i - startIdx) * step + step / 2
+        double x = (idx - startIdx) * step + step / 2;
+        
+        final time = data[idx].time;
+        // Format: MM-dd HH:mm
+        final text = DateFormat('MM-dd HH:mm').format(time);
+        
+        tp.text = TextSpan(
+          text: text,
+          style: const TextStyle(
+            color: AppColors.textSecondary, 
+            fontSize: 10,
+            fontWeight: FontWeight.w500,
+            height: 1.0,
+          ),
+        );
+        tp.layout();
+        
+        double drawX = x;
+        if (i == 0) {
+          // Left align: Start at x (or 0 if x is small)
+          drawX = x < 0 ? 0 : x;
+          // Ensure we don't draw off left edge if x is near 0
+          if (drawX < 0) drawX = 0;
+        } else if (i == indices.length - 1) {
+          // Right align: End at x
+          drawX = x - tp.width;
+          // Ensure we don't draw past plotWidth
+          if (drawX + tp.width > plotWidth) drawX = plotWidth - tp.width;
+        } else {
+          // Center align
+          drawX = x - tp.width / 2;
+        }
+        
+        // Vertical center in the container
+        final drawY = (size.height - tp.height) / 2;
+        
+        tp.paint(canvas, Offset(drawX, drawY));
     }
   }
 
   @override
-  bool shouldRepaint(covariant _TimeAxisPainter old) => true;
+  bool shouldRepaint(covariant _TimeAxisPainter old) {
+    return old.startIdx != startIdx || old.endIdx != endIdx || old.step != step;
+  }
 }
