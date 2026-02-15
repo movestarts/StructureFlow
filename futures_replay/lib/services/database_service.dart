@@ -8,6 +8,7 @@ import 'dart:io';
 import '../models/kline_entity.dart';
 import '../models/kline_model.dart';
 import '../models/period.dart';
+import '../models/ai_review_record.dart';
 import '../models/trade_record.dart';
 
 List<Map<String, dynamic>> _decodeTradeHistoryPayloads(List<String> payloads) {
@@ -31,8 +32,29 @@ List<Map<String, dynamic>> _decodeTradeHistoryPayloads(List<String> payloads) {
   return result;
 }
 
+List<Map<String, dynamic>> _decodeAiReviewPayloads(List<String> payloads) {
+  final result = <Map<String, dynamic>>[];
+  for (final payload in payloads) {
+    try {
+      final decoded = base64Url.decode(payload);
+      String jsonText;
+      try {
+        jsonText = utf8.decode(gzip.decode(decoded));
+      } catch (_) {
+        jsonText = utf8.decode(decoded);
+      }
+      final map = jsonDecode(jsonText) as Map<String, dynamic>;
+      result.add(map);
+    } catch (_) {
+      // Skip malformed rows.
+    }
+  }
+  return result;
+}
+
 class DatabaseService {
   static const String _tradeHistorySymbol = '__trade_history_v1__';
+  static const String _aiReviewSymbol = '__ai_review_v1__';
   static final DatabaseService _instance = DatabaseService._internal();
 
   factory DatabaseService() {
@@ -223,6 +245,69 @@ class DatabaseService {
       }
     }
     return records;
+  }
+
+  Future<void> saveAiReview(AiReviewRecord record) async {
+    if (!_isInitialized) await init();
+
+    final payload = base64Url.encode(
+      gzip.encode(utf8.encode(jsonEncode(record.toJson()))),
+    );
+
+    final entity = KlineEntity()
+      ..symbol = _aiReviewSymbol
+      ..period = payload
+      ..time = record.createdAt.millisecondsSinceEpoch
+      ..open = record.score.toDouble()
+      ..high = 0
+      ..low = 0
+      ..close = 0
+      ..volume = 0;
+
+    await _isar.writeTxn(() async {
+      await _isar.klineEntitys.put(entity);
+    });
+  }
+
+  Future<List<AiReviewRecord>> loadAiReviews() async {
+    if (!_isInitialized) await init();
+
+    final payloads = await _isar.klineEntitys
+        .filter()
+        .symbolEqualTo(_aiReviewSymbol)
+        .sortByTimeDesc()
+        .periodProperty()
+        .findAll();
+
+    if (payloads.isEmpty) return const [];
+
+    final maps = payloads.length >= 100
+        ? await compute(_decodeAiReviewPayloads, payloads)
+        : _decodeAiReviewPayloads(payloads);
+
+    final records = <AiReviewRecord>[];
+    for (final map in maps) {
+      try {
+        records.add(AiReviewRecord.fromJson(map));
+      } catch (err) {
+        debugPrint('Failed to decode ai review row: $err');
+      }
+    }
+    return records;
+  }
+
+  Future<List<AiReviewRecord>> loadAiReviewsByTradeIds(List<String> tradeIds) async {
+    if (tradeIds.isEmpty) return const [];
+    final all = await loadAiReviews();
+    final idSet = tradeIds.toSet();
+    return all.where((r) => r.tradeIds.any(idSet.contains)).toList();
+  }
+
+  Future<void> clearAiReviews() async {
+    if (!_isInitialized) await init();
+    await _isar.writeTxn(() async {
+      await _isar.klineEntitys.filter().symbolEqualTo(_aiReviewSymbol).deleteAll();
+    });
   }
   
   Future<void> clearAll() async {

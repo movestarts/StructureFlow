@@ -11,8 +11,10 @@ import '../chart/chart_view_controller.dart';
 import '../../models/kline_model.dart';
 import '../../models/trade_model.dart';
 import '../../models/trade_record.dart';
+import '../../models/ai_review_record.dart';
 import '../../services/indicator_service.dart';
 import '../../services/data_service.dart';
+import '../../services/database_service.dart';
 import '../../models/period.dart';
 import 'package:intl/intl.dart' show DateFormat;
 
@@ -32,6 +34,7 @@ class TradeHistoryChartScreen extends StatefulWidget {
 class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
   final ChartViewController _chartController = ChartViewController();
   final IndicatorService _indicatorService = IndicatorService();
+  final DatabaseService _databaseService = DatabaseService();
 
   List<KlineModel> _allData = [];
   bool _isLoading = true;
@@ -233,6 +236,13 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
         ),
         title: Text(title, style: const TextStyle(color: AppColors.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: '历史AI分析',
+            onPressed: _showHistoryAiReviews,
+            icon: const Icon(Icons.psychology_alt, color: AppColors.textPrimary),
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
@@ -504,6 +514,104 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _showHistoryAiReviews() async {
+    final tradeIds = widget.sessionTrades.map((e) => e.id).toList();
+    if (tradeIds.isEmpty) return;
+
+    try {
+      final reviews = await _databaseService.loadAiReviewsByTradeIds(tradeIds);
+      if (!mounted) return;
+      if (reviews.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前仓位暂无历史AI分析')),
+        );
+        return;
+      }
+
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: AppColors.bgCard,
+        builder: (ctx) => SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: const EdgeInsets.all(12),
+            itemCount: reviews.length,
+            separatorBuilder: (_, __) => const Divider(color: AppColors.border),
+            itemBuilder: (_, index) {
+              final item = reviews[index];
+              return ListTile(
+                title: Text(
+                  '${DateFormat('yyyy-MM-dd HH:mm').format(item.createdAt)}  ${item.score}分',
+                  style: const TextStyle(color: AppColors.textPrimary),
+                ),
+                subtitle: Text(
+                  item.summary,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.textSecondary),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showAiReviewDetail(item);
+                },
+              );
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('读取历史AI分析失败: $e')),
+      );
+    }
+  }
+
+  Future<void> _showAiReviewDetail(AiReviewRecord item) async {
+    final text = StringBuffer()..writeln('总评: ${item.summary}');
+    if (item.strengths.isNotEmpty) {
+      text.writeln('\n优点:');
+      for (final v in item.strengths) {
+        text.writeln('- $v');
+      }
+    }
+    if (item.risks.isNotEmpty) {
+      text.writeln('\n问题:');
+      for (final v in item.risks) {
+        text.writeln('- $v');
+      }
+    }
+    if (item.suggestions.isNotEmpty) {
+      text.writeln('\n建议:');
+      for (final v in item.suggestions) {
+        text.writeln('- $v');
+      }
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgCard,
+        title: Text(
+          '历史AI分析 · ${item.score}分',
+          style: const TextStyle(color: AppColors.textPrimary),
+        ),
+        content: SingleChildScrollView(
+          child: Text(
+            text.toString().trim(),
+            style: const TextStyle(color: AppColors.textSecondary, height: 1.35),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }

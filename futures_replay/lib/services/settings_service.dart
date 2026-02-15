@@ -37,6 +37,12 @@ class SettingsService extends ChangeNotifier {
   // 数据缓存目录
   String dataCacheDir = '';
 
+  // ===== LLM =====
+  String llmProvider = 'zhipu'; // zhipu | openai | custom
+  String llmApiKey = '';
+  String llmEndpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+  String llmModel = 'glm-4.6v-flash';
+
   // ===== 快捷键 =====
   String shortcutBuy = 'S';
   String shortcutSell = 'B';
@@ -62,6 +68,10 @@ class SettingsService extends ChangeNotifier {
     futuresMakerFee = 0.025;
     futuresTakerFee = 0.050;
     dataCacheDir = '';
+    llmProvider = 'zhipu';
+    llmApiKey = '';
+    llmEndpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+    llmModel = 'glm-4.6v-flash';
     notifyListeners();
     _saveToDisk();
   }
@@ -117,6 +127,11 @@ class SettingsService extends ChangeNotifier {
         futuresMakerFee = (json['futuresMakerFee'] as num?)?.toDouble() ?? 0.025;
         futuresTakerFee = (json['futuresTakerFee'] as num?)?.toDouble() ?? 0.050;
         dataCacheDir = json['dataCacheDir'] as String? ?? '';
+        llmProvider = json['llmProvider'] as String? ?? 'zhipu';
+        llmApiKey = json['llmApiKey'] as String? ?? '';
+        llmEndpoint = json['llmEndpoint'] as String? ??
+            'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+        llmModel = json['llmModel'] as String? ?? 'glm-4.6v-flash';
 
         shortcutBuy = json['shortcutBuy'] as String? ?? 'S';
         shortcutSell = json['shortcutSell'] as String? ?? 'B';
@@ -149,6 +164,10 @@ class SettingsService extends ChangeNotifier {
         'futuresMakerFee': futuresMakerFee,
         'futuresTakerFee': futuresTakerFee,
         'dataCacheDir': dataCacheDir,
+        'llmProvider': llmProvider,
+        'llmApiKey': llmApiKey,
+        'llmEndpoint': llmEndpoint,
+        'llmModel': llmModel,
         'shortcutBuy': shortcutBuy,
         'shortcutSell': shortcutSell,
         'shortcutClose': shortcutClose,

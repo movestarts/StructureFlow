@@ -84,6 +84,7 @@ class AccountService extends ChangeNotifier {
     _recomputeTradeHistoryStats();
     notifyListeners();
     _saveHistoryToDisk();
+    _db.clearAiReviews();
   }
 
   /// Reset account and history.
@@ -97,6 +98,7 @@ class AccountService extends ChangeNotifier {
     notifyListeners();
     _saveToDisk();
     _saveHistoryToDisk();
+    _db.clearAiReviews();
   }
 
   Future<String> get _filePath async {

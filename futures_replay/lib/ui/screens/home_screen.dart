@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../../services/account_service.dart';
 import 'setup_screen.dart';
 import 'position_calculator_screen.dart';
+import 'operation_analysis_screen.dart';
 import 'settings_screen.dart';
 import 'trade_history_screen.dart';
 
@@ -407,6 +408,12 @@ class _HomeScreenState extends State<HomeScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const PositionCalculatorScreen()),
+              );
+            }),
+            _buildToolCard(Icons.psychology_alt, '操作分析', const Color(0xFF0EA5E9), onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const OperationAnalysisScreen()),
               );
             }),
           ],
