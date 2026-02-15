@@ -13,8 +13,17 @@ import '../chart/chart_view_controller.dart';
 import '../theme/app_theme.dart';
 import '../../models/trade_model.dart';
 import '../../models/trade_record.dart';
+import '../../models/ai_review_record.dart';
 import '../../services/account_service.dart';
+import '../../services/ai_review_service.dart';
+import '../../services/database_service.dart';
+import '../../services/settings_service.dart';
 import 'package:intl/intl.dart';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
 import '../widgets/order_panel.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
@@ -54,6 +63,10 @@ class _MainScreenState extends State<MainScreen> {
 
   Period _currentPeriod = Period.m5;
   bool _isInitialized = false;
+  final GlobalKey _reviewCaptureKey = GlobalKey();
+  final AiReviewService _aiReviewService = AiReviewService();
+  final DatabaseService _databaseService = DatabaseService();
+  bool _isReviewing = false;
 
   // 主图指标
   MainIndicatorType _mainIndicator = MainIndicatorType.boll;
@@ -272,7 +285,9 @@ class _MainScreenState extends State<MainScreen> {
       child: Scaffold(
         backgroundColor: AppColors.bgDark,
         body: SafeArea(
-          child: Column(
+          child: RepaintBoundary(
+            key: _reviewCaptureKey,
+            child: Column(
             children: [
               // 顶部状态栏
               _buildTopBar(),
@@ -287,6 +302,7 @@ class _MainScreenState extends State<MainScreen> {
               // 底部操作面板
               _buildActionBar(),
             ],
+            ),
           ),
         ),
       ),
@@ -369,6 +385,27 @@ class _MainScreenState extends State<MainScreen> {
                   ..._buildPeriodTabs(),
 
                   const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: _isReviewing ? null : _showAiReviewPromptDialog,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _isReviewing
+                            ? AppColors.textMuted.withOpacity(0.2)
+                            : AppColors.primary.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _isReviewing ? 'AI...' : 'AI',
+                        style: const TextStyle(
+                          color: AppColors.primary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   // 设置
                   GestureDetector(
                     onTap: () => _showSpeedDialog(),
@@ -797,6 +834,165 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _showAiReviewPromptDialog() async {
+    final controller = TextEditingController(
+      text: '请从趋势、入场时机、止盈止损和风险控制角度点评这张复盘图，并给出0-100分。',
+    );
+    final prompt = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgCard,
+        title: const Text(
+          'AI 交易助理',
+          style: TextStyle(color: AppColors.textPrimary),
+        ),
+        content: TextField(
+          controller: controller,
+          maxLines: 4,
+          style: const TextStyle(color: AppColors.textPrimary),
+          decoration: const InputDecoration(
+            hintText: '输入你希望AI重点点评的内容',
+            hintStyle: TextStyle(color: AppColors.textMuted),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('开始点评'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || prompt == null || prompt.isEmpty) return;
+    await _runAiReview(prompt);
+  }
+
+  Future<void> _runAiReview(String prompt) async {
+    if (_isReviewing) return;
+    setState(() => _isReviewing = true);
+    try {
+      final imageBase64 = await _captureReviewImageBase64();
+      final settings = context.read<SettingsService>();
+      final result = await _aiReviewService.reviewChartImage(
+        imageBase64: imageBase64,
+        userPrompt: prompt,
+        apiKey: settings.llmApiKey,
+        endpoint: settings.llmEndpoint,
+        model: settings.llmModel,
+      );
+      await _saveAiReview(prompt: prompt, result: result);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.bgCard,
+          title: Row(
+            children: [
+              const Text(
+                'AI 点评结果',
+                style: TextStyle(color: AppColors.textPrimary),
+              ),
+              const Spacer(),
+              Text(
+                '${result.score}分',
+                style: TextStyle(
+                  color: result.score >= 70 ? AppColors.bullish : AppColors.warning,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Text(
+              _buildReviewText(result),
+              style: const TextStyle(color: AppColors.textSecondary, height: 1.35),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('AI点评失败: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isReviewing = false);
+    }
+  }
+
+  Future<void> _saveAiReview({
+    required String prompt,
+    required AiReviewResult result,
+  }) async {
+    final now = DateTime.now();
+    final closedIds = _tradeEngine.closedTrades.map((e) => e.id).toList();
+    final record = AiReviewRecord.fromResult(
+      id: _nextAiReviewId(now),
+      createdAt: now,
+      instrumentCode: widget.instrumentCode,
+      period: _currentPeriod.code,
+      prompt: prompt,
+      result: result,
+      tradeIds: closedIds,
+    );
+    await _databaseService.saveAiReview(record);
+  }
+
+  String _nextAiReviewId(DateTime now) {
+    final rand = Random().nextInt(1 << 32).toRadixString(16);
+    return 'ai_${now.microsecondsSinceEpoch}_$rand';
+  }
+
+  Future<String> _captureReviewImageBase64() async {
+    await Future.delayed(const Duration(milliseconds: 16));
+    final boundary = _reviewCaptureKey.currentContext?.findRenderObject()
+        as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw Exception('截图失败：图像边界不可用');
+    }
+    final ui.Image image = await boundary.toImage(pixelRatio: 1.2);
+    final data = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) {
+      throw Exception('截图失败：图像数据为空');
+    }
+    final Uint8List bytes = data.buffer.asUint8List();
+    return base64Encode(bytes);
+  }
+
+  String _buildReviewText(AiReviewResult result) {
+    final buffer = StringBuffer();
+    buffer.writeln('总评：${result.summary}');
+    if (result.strengths.isNotEmpty) {
+      buffer.writeln('\n优点：');
+      for (final item in result.strengths) {
+        buffer.writeln('• $item');
+      }
+    }
+    if (result.risks.isNotEmpty) {
+      buffer.writeln('\n问题：');
+      for (final item in result.risks) {
+        buffer.writeln('• $item');
+      }
+    }
+    if (result.suggestions.isNotEmpty) {
+      buffer.writeln('\n建议：');
+      for (final item in result.suggestions) {
+        buffer.writeln('• $item');
+      }
+    }
+    return buffer.toString().trim();
   }
 
   void _showOrderPanel(BuildContext context, TradeEngine trade, double price, DateTime time, Direction? initialDirection) {

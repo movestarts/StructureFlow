@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../../services/settings_service.dart';
 import 'global_settings_screen.dart';
 import 'shortcut_settings_screen.dart';
+import 'llm_settings_screen.dart';
 import 'import_data_screen.dart';
 import 'delete_data_screen.dart';
 
@@ -83,6 +84,15 @@ class SettingsScreen extends StatelessWidget {
                   title: '快捷键设置',
                   onTap: () {
                     Navigator.push(context, MaterialPageRoute(builder: (_) => const ShortcutSettingsScreen()));
+                  },
+                ),
+                _SettingsItem(
+                  icon: Icons.smart_toy_outlined,
+                  iconBg: const Color(0xFF10B981),
+                  title: '大模型配置',
+                  subtitle: 'Provider / API Key / Endpoint / Model',
+                  onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const LlmSettingsScreen()));
                   },
                 ),
               ]),
