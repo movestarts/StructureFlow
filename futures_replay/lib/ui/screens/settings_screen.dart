@@ -5,6 +5,7 @@ import '../../services/settings_service.dart';
 import 'global_settings_screen.dart';
 import 'shortcut_settings_screen.dart';
 import 'llm_settings_screen.dart';
+import 'llm_model_management_screen.dart';
 import 'import_data_screen.dart';
 import 'delete_data_screen.dart';
 
@@ -93,6 +94,15 @@ class SettingsScreen extends StatelessWidget {
                   subtitle: 'Provider / API Key / Endpoint / Model',
                   onTap: () {
                     Navigator.push(context, MaterialPageRoute(builder: (_) => const LlmSettingsScreen()));
+                  },
+                ),
+                _SettingsItem(
+                  icon: Icons.manage_accounts_outlined,
+                  iconBg: const Color(0xFF0EA5E9),
+                  title: '大模型管理',
+                  subtitle: '管理多个模型与能力标签',
+                  onTap: () {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const LlmModelManagementScreen()));
                   },
                 ),
               ]),

@@ -55,6 +55,7 @@ List<Map<String, dynamic>> _decodeAiReviewPayloads(List<String> payloads) {
 class DatabaseService {
   static const String _tradeHistorySymbol = '__trade_history_v1__';
   static const String _aiReviewSymbol = '__ai_review_v1__';
+  static const String _llmConfigSymbol = '__llm_config_v1__';
   static final DatabaseService _instance = DatabaseService._internal();
 
   factory DatabaseService() {
@@ -307,6 +308,63 @@ class DatabaseService {
     if (!_isInitialized) await init();
     await _isar.writeTxn(() async {
       await _isar.klineEntitys.filter().symbolEqualTo(_aiReviewSymbol).deleteAll();
+    });
+  }
+
+  Future<void> saveLlmConfigSnapshot(Map<String, dynamic> config) async {
+    if (!_isInitialized) await init();
+
+    final payload = base64Url.encode(
+      gzip.encode(utf8.encode(jsonEncode(config))),
+    );
+
+    final entity = KlineEntity()
+      ..symbol = _llmConfigSymbol
+      ..period = payload
+      ..time = DateTime.now().millisecondsSinceEpoch
+      ..open = 0
+      ..high = 0
+      ..low = 0
+      ..close = 0
+      ..volume = 0;
+
+    await _isar.writeTxn(() async {
+      await _isar.klineEntitys.filter().symbolEqualTo(_llmConfigSymbol).deleteAll();
+      await _isar.klineEntitys.put(entity);
+    });
+  }
+
+  Future<Map<String, dynamic>?> loadLlmConfigSnapshot() async {
+    if (!_isInitialized) await init();
+
+    final row = await _isar.klineEntitys
+        .filter()
+        .symbolEqualTo(_llmConfigSymbol)
+        .sortByTimeDesc()
+        .findFirst();
+    if (row == null) return null;
+
+    try {
+      final decoded = base64Url.decode(row.period);
+      String jsonText;
+      try {
+        jsonText = utf8.decode(gzip.decode(decoded));
+      } catch (_) {
+        jsonText = utf8.decode(decoded);
+      }
+      final map = jsonDecode(jsonText);
+      if (map is Map<String, dynamic>) return map;
+      if (map is Map) return Map<String, dynamic>.from(map);
+    } catch (_) {
+      // Ignore malformed settings row.
+    }
+    return null;
+  }
+
+  Future<void> clearLlmConfig() async {
+    if (!_isInitialized) await init();
+    await _isar.writeTxn(() async {
+      await _isar.klineEntitys.filter().symbolEqualTo(_llmConfigSymbol).deleteAll();
     });
   }
   

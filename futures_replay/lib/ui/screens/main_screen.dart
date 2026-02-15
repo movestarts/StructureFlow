@@ -903,12 +903,13 @@ class _MainScreenState extends State<MainScreen> {
     try {
       final imageBase64 = await _captureReviewImageBase64();
       final settings = context.read<SettingsService>();
+      final visionProfile = settings.getProfileForTask('image_review');
       final result = await _aiReviewService.reviewChartImage(
         imageBase64: imageBase64,
         userPrompt: prompt,
-        apiKey: settings.llmApiKey,
-        endpoint: settings.llmEndpoint,
-        model: settings.llmModel,
+        apiKey: visionProfile.apiKey,
+        endpoint: visionProfile.endpoint,
+        model: visionProfile.model,
       );
       await _saveAiReview(prompt: prompt, result: result);
       if (!mounted) return;
