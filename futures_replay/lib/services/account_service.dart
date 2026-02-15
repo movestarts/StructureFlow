@@ -3,34 +3,50 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/trade_record.dart';
+import 'database_service.dart';
 
-/// 全局账户服务 - 持久化训练结果 + 交易历史
+List<Map<String, dynamic>> _decodeTradeHistoryJson(String jsonText) {
+  final decoded = jsonDecode(jsonText);
+  if (decoded is! List) return const [];
+  return decoded
+      .whereType<Map>()
+      .map((e) => Map<String, dynamic>.from(e))
+      .toList();
+}
+
+/// Global account service: persistent training summary + trade history.
 class AccountService extends ChangeNotifier {
-  double balance = 100000.0; // 初始资金 10万
+  final DatabaseService _db = DatabaseService();
+
+  double balance = 100000.0; // Initial capital
   double totalPnL = 0.0;
   int tradeCount = 0;
   int winCount = 0;
 
-  /// 交易历史记录
+  /// Trade history records, newest first.
   List<TradeRecord> tradeHistory = [];
+
+  double _cachedTotalFees = 0.0;
+  int _cachedLongCount = 0;
+  int _cachedShortCount = 0;
 
   double get roi => balance != 0 ? ((balance - 100000) / 100000 * 100) : 0.0;
   double get winRate => tradeCount > 0 ? (winCount / tradeCount * 100) : 0.0;
 
-  /// 总手续费
-  double get totalFees => tradeHistory.fold(0.0, (sum, t) => sum + t.fee);
+  /// Total fees.
+  double get totalFees => _cachedTotalFees;
 
-  /// 做多次数
-  int get longCount => tradeHistory.where((t) => t.isLong).length;
+  /// Number of long trades.
+  int get longCount => _cachedLongCount;
 
-  /// 做空次数
-  int get shortCount => tradeHistory.where((t) => !t.isLong).length;
+  /// Number of short trades.
+  int get shortCount => _cachedShortCount;
 
   AccountService() {
     _loadFromDisk();
   }
 
-  /// 训练结束后提交结果
+  /// Submit summary from one finished session.
   void submitSessionResult({
     required double sessionPnL,
     required int sessionTradeCount,
@@ -44,42 +60,44 @@ class AccountService extends ChangeNotifier {
     _saveToDisk();
   }
 
-  /// 添加交易记录
+  /// Add one trade record.
   void addTradeRecord(TradeRecord record) {
-    tradeHistory.insert(0, record); // 新的排在前面
+    tradeHistory.insert(0, record);
+    _applyTradeRecordDelta(record, adding: true);
     notifyListeners();
     _saveHistoryToDisk();
   }
 
-  /// 批量添加交易记录
+  /// Add multiple trade records.
   void addTradeRecords(List<TradeRecord> records) {
     for (final r in records) {
       tradeHistory.insert(0, r);
+      _applyTradeRecordDelta(r, adding: true);
     }
     notifyListeners();
     _saveHistoryToDisk();
   }
 
-  /// 清空交易历史
+  /// Clear history.
   void clearHistory() {
     tradeHistory.clear();
+    _recomputeTradeHistoryStats();
     notifyListeners();
     _saveHistoryToDisk();
   }
 
-  /// 重置账户
+  /// Reset account and history.
   void reset() {
     balance = 100000.0;
     totalPnL = 0.0;
     tradeCount = 0;
     winCount = 0;
     tradeHistory.clear();
+    _recomputeTradeHistoryStats();
     notifyListeners();
     _saveToDisk();
     _saveHistoryToDisk();
   }
-
-  // ===== 本地持久化 =====
 
   Future<String> get _filePath async {
     final dir = await getApplicationSupportDirectory();
@@ -103,23 +121,42 @@ class AccountService extends ChangeNotifier {
         winCount = (json['winCount'] as int?) ?? 0;
       }
     } catch (e) {
-      debugPrint('加载账户数据失败: $e');
+      debugPrint('Load account data failed: $e');
     }
 
-    // 加载交易历史
+    bool loadedFromDb = false;
     try {
-      final path = await _historyPath;
-      final file = File(path);
-      if (await file.exists()) {
-        final jsonList = jsonDecode(await file.readAsString()) as List;
-        tradeHistory = jsonList
-            .map((j) => TradeRecord.fromJson(j as Map<String, dynamic>))
-            .toList();
+      final dbHistory = await _db.loadTradeHistory();
+      if (dbHistory.isNotEmpty) {
+        tradeHistory = dbHistory;
+        loadedFromDb = true;
       }
     } catch (e) {
-      debugPrint('加载交易历史失败: $e');
+      debugPrint('Load trade history from Isar failed: $e');
     }
 
+    if (!loadedFromDb) {
+      try {
+        final path = await _historyPath;
+        final file = File(path);
+        if (await file.exists()) {
+          final content = await file.readAsString();
+          final shouldUseIsolate = content.length > 64 * 1024;
+          final jsonList = shouldUseIsolate
+              ? await compute(_decodeTradeHistoryJson, content)
+              : _decodeTradeHistoryJson(content);
+          tradeHistory = jsonList.map(TradeRecord.fromJson).toList();
+
+          if (tradeHistory.isNotEmpty) {
+            await _db.saveTradeHistorySnapshot(tradeHistory);
+          }
+        }
+      } catch (e) {
+        debugPrint('Load trade history failed: $e');
+      }
+    }
+
+    _recomputeTradeHistoryStats();
     notifyListeners();
   }
 
@@ -134,7 +171,7 @@ class AccountService extends ChangeNotifier {
         'winCount': winCount,
       }));
     } catch (e) {
-      debugPrint('保存账户数据失败: $e');
+      debugPrint('Save account data failed: $e');
     }
   }
 
@@ -145,8 +182,37 @@ class AccountService extends ChangeNotifier {
       await file.writeAsString(jsonEncode(
         tradeHistory.map((t) => t.toJson()).toList(),
       ));
+
+      await _db.saveTradeHistorySnapshot(tradeHistory);
     } catch (e) {
-      debugPrint('保存交易历史失败: $e');
+      debugPrint('Save trade history failed: $e');
     }
+  }
+
+  void _applyTradeRecordDelta(TradeRecord record, {required bool adding}) {
+    final sign = adding ? 1 : -1;
+    _cachedTotalFees += sign * record.fee;
+    if (record.isLong) {
+      _cachedLongCount += sign;
+    } else {
+      _cachedShortCount += sign;
+    }
+  }
+
+  void _recomputeTradeHistoryStats() {
+    double feeSum = 0.0;
+    int long = 0;
+    int short = 0;
+    for (final t in tradeHistory) {
+      feeSum += t.fee;
+      if (t.isLong) {
+        long += 1;
+      } else {
+        short += 1;
+      }
+    }
+    _cachedTotalFees = feeSum;
+    _cachedLongCount = long;
+    _cachedShortCount = short;
   }
 }

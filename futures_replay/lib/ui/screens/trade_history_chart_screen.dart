@@ -152,6 +152,12 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
         }
       }
 
+      klines = _trimKlinesAroundSessionTrades(
+        klines,
+        widget.sessionTrades,
+        contextBars: 50,
+      );
+
       // Load FULL data for the session review
       setState(() {
         _allData = klines;
@@ -175,6 +181,40 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
     _wrData = _indicatorService.calculateWR(_allData);
     _volMa5 = _indicatorService.calculateVolumeMA(_allData, 5);
     _volMa10 = _indicatorService.calculateVolumeMA(_allData, 10);
+  }
+
+  List<KlineModel> _trimKlinesAroundSessionTrades(
+    List<KlineModel> klines,
+    List<TradeRecord> trades, {
+    int contextBars = 50,
+  }) {
+    if (klines.isEmpty || trades.isEmpty) return klines;
+
+    DateTime startTime = trades.first.entryTime;
+    DateTime endTime = trades.first.closeTime;
+    for (final t in trades) {
+      if (t.entryTime.isBefore(startTime)) {
+        startTime = t.entryTime;
+      }
+      if (t.closeTime.isAfter(endTime)) {
+        endTime = t.closeTime;
+      }
+    }
+
+    int startIdx = klines.indexWhere(
+      (k) => k.time.isAtSameMomentAs(startTime) || k.time.isAfter(startTime),
+    );
+    if (startIdx < 0) startIdx = 0;
+
+    int endIdx = klines.indexWhere(
+      (k) => k.time.isAtSameMomentAs(endTime) || k.time.isAfter(endTime),
+    );
+    if (endIdx < 0) endIdx = klines.length - 1;
+    if (endIdx < startIdx) endIdx = startIdx;
+
+    final from = (startIdx - contextBars).clamp(0, klines.length - 1);
+    final to = (endIdx + contextBars).clamp(0, klines.length - 1);
+    return klines.sublist(from, to + 1);
   }
 
   @override

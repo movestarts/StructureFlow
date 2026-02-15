@@ -2,13 +2,37 @@
 import 'package:flutter/foundation.dart';
 import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
+import 'dart:convert';
 import 'dart:io';
 
 import '../models/kline_entity.dart';
 import '../models/kline_model.dart';
 import '../models/period.dart';
+import '../models/trade_record.dart';
+
+List<Map<String, dynamic>> _decodeTradeHistoryPayloads(List<String> payloads) {
+  final result = <Map<String, dynamic>>[];
+  for (final payload in payloads) {
+    try {
+      final decoded = base64Url.decode(payload);
+      String jsonText;
+      try {
+        jsonText = utf8.decode(gzip.decode(decoded));
+      } catch (_) {
+        // Backward compatibility with old plain base64 payloads.
+        jsonText = utf8.decode(decoded);
+      }
+      final map = jsonDecode(jsonText) as Map<String, dynamic>;
+      result.add(map);
+    } catch (_) {
+      // Skip malformed rows.
+    }
+  }
+  return result;
+}
 
 class DatabaseService {
+  static const String _tradeHistorySymbol = '__trade_history_v1__';
   static final DatabaseService _instance = DatabaseService._internal();
 
   factory DatabaseService() {
@@ -142,6 +166,63 @@ class DatabaseService {
         .count();
     
     return count > 0;
+  }
+
+  Future<void> saveTradeHistorySnapshot(List<TradeRecord> records) async {
+    if (!_isInitialized) await init();
+
+    final entities = records.map((t) {
+      final payload = base64Url.encode(
+        gzip.encode(utf8.encode(jsonEncode(t.toJson()))),
+      );
+      return KlineEntity()
+        ..symbol = _tradeHistorySymbol
+        ..period = payload
+        ..time = t.trainingTime.millisecondsSinceEpoch
+        ..open = 0
+        ..high = 0
+        ..low = 0
+        ..close = 0
+        ..volume = 0;
+    }).toList();
+
+    await _isar.writeTxn(() async {
+      await _isar.klineEntitys
+          .filter()
+          .symbolEqualTo(_tradeHistorySymbol)
+          .deleteAll();
+
+      if (entities.isNotEmpty) {
+        await _isar.klineEntitys.putAll(entities);
+      }
+    });
+  }
+
+  Future<List<TradeRecord>> loadTradeHistory() async {
+    if (!_isInitialized) await init();
+
+    final payloads = await _isar.klineEntitys
+        .filter()
+        .symbolEqualTo(_tradeHistorySymbol)
+        .sortByTimeDesc()
+        .periodProperty()
+        .findAll();
+
+    if (payloads.isEmpty) return const [];
+
+    final maps = payloads.length >= 100
+        ? await compute(_decodeTradeHistoryPayloads, payloads)
+        : _decodeTradeHistoryPayloads(payloads);
+
+    final records = <TradeRecord>[];
+    for (final map in maps) {
+      try {
+        records.add(TradeRecord.fromJson(map));
+      } catch (err) {
+        debugPrint('Failed to decode trade history row: $err');
+      }
+    }
+    return records;
   }
   
   Future<void> clearAll() async {

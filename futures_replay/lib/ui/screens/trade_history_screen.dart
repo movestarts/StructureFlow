@@ -22,10 +22,22 @@ class TradeHistoryScreen extends StatefulWidget {
   State<TradeHistoryScreen> createState() => _TradeHistoryScreenState();
 }
 
+class _SessionViewData {
+  final List<TradeRecord> sessionTrades;
+  final List<TradeRecord> sortedTrades;
+
+  const _SessionViewData({
+    required this.sessionTrades,
+    required this.sortedTrades,
+  });
+}
+
 class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
   int _tabIndex = 0; // 0=每个仓位, 1=每日
   bool _isSelectionMode = false;
   final Set<String> _selectedIds = {};
+  String _dailyCacheSignature = '';
+  List<_SessionViewData> _dailyCacheSessions = const [];
 
   bool get _isDark => Theme.of(context).brightness == Brightness.dark;
   Color get _cardBg => _isDark ? AppColors.bgCard : Colors.white;
@@ -603,14 +615,20 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
   }
 
   // 每一局汇总 (Expandable List)
-  Widget _buildDailyList(AccountService account) {
-    final trades = account.tradeHistory;
-    if (trades.isEmpty) {
-      return Center(child: Text('暂无交易记录', style: TextStyle(color: _textMuted, fontSize: 16)));
+  String _buildDailySignature(List<TradeRecord> trades) {
+    if (trades.isEmpty) return '0';
+    final first = trades.first;
+    final last = trades.last;
+    return '${trades.length}|${first.id}|${first.trainingTime.microsecondsSinceEpoch}|${last.id}|${last.trainingTime.microsecondsSinceEpoch}';
+  }
+
+  List<_SessionViewData> _getDailySessions(List<TradeRecord> trades) {
+    final signature = _buildDailySignature(trades);
+    if (_dailyCacheSignature == signature) {
+      return _dailyCacheSessions;
     }
 
-    // Group by Training Time (Session)
-    final Map<String, List<TradeRecord>> grouped = {};
+    final grouped = <String, List<TradeRecord>>{};
     for (final t in trades) {
       final key = t.trainingTime.toIso8601String();
       grouped.putIfAbsent(key, () => []);
@@ -618,21 +636,40 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
     }
 
     final sortedKeys = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+    final sessions = sortedKeys.map((key) {
+      final sessionTrades = grouped[key]!;
+      final sortedTrades = List<TradeRecord>.from(sessionTrades)
+        ..sort((a, b) => a.entryTime.compareTo(b.entryTime));
+      return _SessionViewData(
+        sessionTrades: sessionTrades,
+        sortedTrades: sortedTrades,
+      );
+    }).toList(growable: false);
+
+    _dailyCacheSignature = signature;
+    _dailyCacheSessions = sessions;
+    return sessions;
+  }
+
+  Widget _buildDailyList(AccountService account) {
+    final trades = account.tradeHistory;
+    if (trades.isEmpty) {
+      return Center(child: Text('暂无交易记录', style: TextStyle(color: _textMuted, fontSize: 16)));
+    }
+
+    final sessions = _getDailySessions(trades);
 
     return ListView.builder(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      itemCount: sortedKeys.length,
-      itemBuilder: (_, i) {
-        final key = sortedKeys[i];
-        final sessionTrades = grouped[key]!;
-        
-        return _buildSessionCard(sessionTrades);
-      },
+      itemCount: sessions.length,
+      itemBuilder: (_, i) => _buildSessionCard(sessions[i]),
     );
   }
 
-  Widget _buildSessionCard(List<TradeRecord> sessionTrades) {
+  Widget _buildSessionCard(_SessionViewData session) {
+    final sessionTrades = session.sessionTrades;
+    final sortedTrades = session.sortedTrades;
     final firstTrade = sessionTrades.first;
     
     // Calculate Session Stats
@@ -652,9 +689,6 @@ class _TradeHistoryScreenState extends State<TradeHistoryScreen> {
     final durationStr = duration.inHours > 0 
         ? '${duration.inHours}小时${duration.inMinutes.remainder(60)}分钟' 
         : '${duration.inMinutes}分钟';
-
-    // Sort trades by entry time
-    final sortedTrades = List<TradeRecord>.from(sessionTrades)..sort((a, b) => a.entryTime.compareTo(b.entryTime));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
