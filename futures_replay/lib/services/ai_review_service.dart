@@ -239,8 +239,40 @@ Output must be pure JSON (no markdown), with fields:
   "summary": "one-sentence verdict",
   "strengths": ["up to 3 strengths"],
   "risks": ["up to 3 issues"],
-  "suggestions": ["up to 3 actionable suggestions"]
+  "suggestions": ["up to 3 actionable suggestions"],
+  "tags": ["select 0-5 tags only from the allowed tag list below, use label text"]
 }
+
+Allowed tags:
+- 顺势而为 (Trend Following)
+- 精准回踩 (Sniper Entry)
+- 突破确认 (Valid Breakout)
+- 右侧交易 (Confirmation)
+- 逆势摸顶底 (Counter Trend)
+- 追涨杀跌 (FOMO Entry)
+- 左侧抢跑 (Premature)
+- 盈亏比优秀 (Great R:R)
+- 止损合理 (Logical Stop)
+- 轻仓试错 (Small Bet)
+- 止损过宽 (Stop Too Wide)
+- 扛单/移损 (Moving Stop)
+- 重仓/满仓 (Oversizing)
+- 拿得住单 (Diamond Hands)
+- 推损及时 (Breakeven)
+- 浮盈加仓 (Pyramiding)
+- 过早离场 (Paper Hands)
+- 逆势补仓 (Averaging Down)
+- 微操过度 (Over-Managing)
+- 止盈精准 (Target Hit)
+- 移动止盈 (Trailing Stop)
+- 知行合一 (Disciplined)
+- 贪婪回吐 (Greed)
+- 报复性交易 (Revenge)
+- 频繁交易 (Overtrading)
+- 环境匹配 (Context Fit)
+- 关键结构位交易
+- 震荡中追趋势
+- 中间区域开仓
 ''';
   }
 }
