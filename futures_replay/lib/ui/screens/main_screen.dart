@@ -165,10 +165,6 @@ class _MainScreenState extends State<MainScreen> {
 
     // 保存交易记录
     final now = DateTime.now();
-    // 确定可见K线数量：如果是回看，默认显示到当前交易结束的时间点，或者整个session长度
-    // 这里使用 _replayEngine.displayKlines.length 可能会有问题因为 engine 已销毁
-    // 我们保存 closedTrades 时，每个 trade 都有 closeTime
-    // 回看页面会根据 trade 自动定位
     
     final records = closedTrades.map((t) => TradeRecord(
       id: t.id,
@@ -184,9 +180,10 @@ class _MainScreenState extends State<MainScreen> {
       entryTime: t.entryTime,
       closeTime: t.closeTime!,
       trainingTime: now,
-      csvPath: cachedPath ?? widget.csvPath, // 优先使用缓存，失败则尝试使用原始路径
+      csvPath: cachedPath ?? widget.csvPath,
       startIndex: 0,
-      visibleBars: null, // 让回看页面自动计算
+      visibleBars: null,
+      period: _currentPeriod.code,
     )).toList();
     accountService.addTradeRecords(records);
   }

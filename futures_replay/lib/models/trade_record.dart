@@ -13,6 +13,7 @@ class TradeRecord {
   final DateTime entryTime;
   final DateTime closeTime;
   final DateTime trainingTime;  // 训练时间戳
+  final String? period;         // 训练周期 (e.g. 'm5', 'm30')
   final String? csvPath;        // 原始CSV路径（用于查看K线）
   final int? startIndex;        // K线起始位置
   final int? visibleBars;       // 可见K线数量
@@ -34,6 +35,7 @@ class TradeRecord {
     this.csvPath,
     this.startIndex,
     this.visibleBars,
+    this.period,
   });
 
   double get pnlPercent {
@@ -62,6 +64,7 @@ class TradeRecord {
     'csvPath': csvPath,
     'startIndex': startIndex,
     'visibleBars': visibleBars,
+    'period': period,
   };
 
   factory TradeRecord.fromJson(Map<String, dynamic> json) {
@@ -82,6 +85,7 @@ class TradeRecord {
       csvPath: json['csvPath'] as String?,
       startIndex: json['startIndex'] as int?,
       visibleBars: json['visibleBars'] as int?,
+      period: json['period'] as String?,
     );
   }
 
@@ -110,8 +114,8 @@ class TradeRecord {
       pnl,
       pnlPercent,
       quantity,
+      period ?? '', // Period
       '', // Setup_Pattern
-      '', // Trend_Context
       '', // Mistake_Tag
       '', // Strategy_Notes
     ];

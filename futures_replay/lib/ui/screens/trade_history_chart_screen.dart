@@ -12,6 +12,8 @@ import '../../models/kline_model.dart';
 import '../../models/trade_model.dart';
 import '../../models/trade_record.dart';
 import '../../services/indicator_service.dart';
+import '../../services/data_service.dart';
+import '../../models/period.dart';
 import 'package:intl/intl.dart' show DateFormat;
 
 /// 副图指标类型 (与 main_screen 保持一致)
@@ -103,30 +105,51 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
         return;
       }
 
-      final bytes = await file.readAsBytes();
-      String content;
-      try {
-        content = utf8.decode(bytes);
-      } catch (_) {
-        content = latin1.decode(bytes);
-      }
-
-      final rows = const CsvToListConverter(eol: '\n').convert(content);
+      // Use DataService to load data (DB cache or CSV fallback)
       List<KlineModel> klines = [];
-      for (int i = 0; i < rows.length; i++) {
-        var row = rows[i];
-        if (row.isEmpty) continue;
-        if (i == 0) {
-          try { double.parse(row[1].toString()); } catch (_) { continue; }
+      try {
+        // Need a DataService instance
+        final dataService = DataService(); 
+        klines = await dataService.loadWithCache(
+          firstTrade.csvPath!, 
+          firstTrade.instrumentCode, 
+          forceRefresh: false
+        );
+      } catch (e) {
+        debugPrint('DataService load error: $e');
+        // Fallback to simple CSV read if DataService fails (unlikely if file exists)
+        final bytes = await file.readAsBytes();
+        String content;
+        try { content = utf8.decode(bytes); } catch (_) { content = latin1.decode(bytes); }
+        final rows = const CsvToListConverter(eol: '\n').convert(content);
+        for (int i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          if (row.isEmpty) continue;
+          if (i == 0) { try { double.parse(row[1].toString()); } catch (_) { continue; } }
+          try { klines.add(KlineModel.fromList(row)); } catch (_) {}
         }
-        try {
-          klines.add(KlineModel.fromList(row));
-        } catch (_) {}
       }
 
       if (klines.isEmpty) {
         setState(() { _error = '未能解析K线数据'; _isLoading = false; });
         return;
+      }
+      
+      // Aggregate if period is known
+      if (firstTrade.period != null) {
+        try {
+           final p = Period.values.firstWhere(
+             (e) => e.code == firstTrade.period, 
+             orElse: () => Period.m5 // Default fallback
+           );
+           
+           if (p != Period.m1 && p != Period.m5) {
+             final ds = DataService();
+             klines = ds.aggregate(klines, p);
+           }
+        } catch (e) {
+          debugPrint('Aggregation error: $e');
+        }
       }
 
       // Load FULL data for the session review
