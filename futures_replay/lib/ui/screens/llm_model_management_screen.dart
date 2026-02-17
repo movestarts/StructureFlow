@@ -169,10 +169,21 @@ class _LlmModelManagementScreenState extends State<LlmModelManagementScreen> {
     );
 
     if (ok != true || !mounted) return;
-    settings.removeLlmProfile(profile.id);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已删除')),
-    );
+    try {
+      await settings.removeLlmProfile(profile.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已删除')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('删除后保存失败：$e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Future<void> _openEditor(
@@ -184,10 +195,21 @@ class _LlmModelManagementScreenState extends State<LlmModelManagementScreen> {
       builder: (_) => _LlmProfileEditorDialog(existing: existing),
     );
     if (result == null || !context.mounted) return;
-    context.read<SettingsService>().upsertLlmProfile(result);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(existing == null ? '已新增模型' : '已保存修改')),
-    );
+    try {
+      await context.read<SettingsService>().upsertLlmProfile(result);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(existing == null ? '已新增模型' : '已保存修改')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('保存失败：$e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 }
 

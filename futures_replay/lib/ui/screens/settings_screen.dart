@@ -126,7 +126,7 @@ class SettingsScreen extends StatelessWidget {
               _buildSectionHeader('其它'),
               const SizedBox(height: 8),
               _buildSettingsGroup(context, isDark, cardBg, dividerClr, textPrimary, textMuted, [
-                _SettingsItem(icon: Icons.info_outline, iconBg: const Color(0xFF6B7280), title: '关于', subtitle: 'v1.0.0'),
+                _SettingsItem(icon: Icons.info_outline, iconBg: const Color(0xFF6B7280), title: '关于', subtitle: 'v1.0.1'),
               ]),
               const SizedBox(height: 32),
             ],

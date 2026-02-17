@@ -6,42 +6,42 @@ import 'package:path_provider/path_provider.dart';
 import '../models/llm_profile.dart';
 import 'database_service.dart';
 
-/// 鍏ㄥ眬璁剧疆鏈嶅姟 - 鎸佷箙鍖栫敤鎴峰亸濂?
 class SettingsService extends ChangeNotifier {
   final DatabaseService _db = DatabaseService();
-  // ===== 澶栬涓庡亸濂?=====
-  // 搴旂敤鐣岄潰涓婚: 'light' | 'dark'
+
+  bool _isInitialized = false;
+  bool _isInitializing = false;
+  final List<void Function()> _pendingOperations = [];
+
   String appThemeMode = 'light';
-  // K绾垮浘琛ㄤ富棰? 'light' | 'dark'
   String chartThemeMode = 'dark';
-  // 娑ㄨ穼棰滆壊: 'redUpGreenDown' | 'greenUpRedDown'
   String priceColorMode = 'redUpGreenDown';
 
-  // ===== 绯荤粺閰嶇疆 =====
-  // 鍦ㄧ嚎/绂荤嚎妯″紡
   bool isOnlineMode = false;
-  // 鍥捐〃鍒濆鍔犺浇 K绾挎暟閲?
   int initialKlineCount = 350;
-  // 闅忔満/瑁窴 棰勭暀鏈€灏慘绾?
   int minReservedKlines = 300;
-  // 闅忔満妯″紡鍏佽鍔犺浇鐨勫競鍦虹被鍨?
   Set<String> allowedMarkets = {'crypto', 'futures'};
-  // 闅忔満妯″紡鍏佽鍔犺浇鐨?K绾垮懆鏈?
   Set<String> allowedPeriods = {
-    '1M', '5M', '10M', '15M', '30M', '1H', '2H', '4H', '12H', '1D',
+    '1M',
+    '5M',
+    '10M',
+    '15M',
+    '30M',
+    '1H',
+    '2H',
+    '4H',
+    '12H',
+    '1D',
   };
 
-  // 浜ゆ槗鎵嬬画璐?(%)
   double spotMakerFee = 0.050;
   double spotTakerFee = 0.100;
   double futuresMakerFee = 0.025;
   double futuresTakerFee = 0.050;
 
-  // 鏁版嵁缂撳瓨鐩綍
   String dataCacheDir = '';
 
-  // ===== LLM =====
-  String llmProvider = 'zhipu'; // zhipu | openai | custom
+  String llmProvider = 'zhipu';
   String llmApiKey = '';
   String llmEndpoint = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
   String llmModel = 'glm-4.6v';
@@ -49,7 +49,6 @@ class SettingsService extends ChangeNotifier {
   String llmVisionProfileId = 'default_vision';
   String llmTextProfileId = 'default_text';
 
-  // ===== 蹇嵎閿?=====
   String shortcutBuy = 'S';
   String shortcutSell = 'B';
   String shortcutClose = 'P';
@@ -60,17 +59,58 @@ class SettingsService extends ChangeNotifier {
     llmProfiles = _buildDefaultProfiles();
     llmVisionProfileId = llmProfiles.first.id;
     llmTextProfileId = llmProfiles.last.id;
-    _loadFromDisk();
+    _initAsync();
   }
 
-  /// 鎭㈠榛樿鍏ㄥ眬璁剧疆
+  Future<void> _initAsync() async {
+    _isInitializing = true;
+    await _loadFromDisk();
+    _isInitializing = false;
+    _isInitialized = true;
+
+    for (final op in _pendingOperations) {
+      op();
+    }
+    _pendingOperations.clear();
+  }
+
+  void _runAfterInit(void Function() operation) {
+    if (_isInitialized) {
+      operation();
+    } else {
+      _pendingOperations.add(operation);
+    }
+  }
+
+  /// 等待初始化完成后，将当前大模型配置写入数据库（确保 API Key 等真正落盘）
+  Future<void> persistLlmConfig() async {
+    while (!_isInitialized) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    try {
+      await _db.saveLlmConfigSnapshot(_buildLlmSettingsMap());
+    } catch (e) {
+      debugPrint('Save llm config snapshot failed: $e');
+      rethrow;
+    }
+  }
+
   void resetGlobalSettings() {
     isOnlineMode = false;
     initialKlineCount = 350;
     minReservedKlines = 300;
     allowedMarkets = {'crypto', 'futures'};
     allowedPeriods = {
-      '1M', '5M', '10M', '15M', '30M', '1H', '2H', '4H', '12H', '1D',
+      '1M',
+      '5M',
+      '10M',
+      '15M',
+      '30M',
+      '1H',
+      '2H',
+      '4H',
+      '12H',
+      '1D',
     };
     spotMakerFee = 0.050;
     spotTakerFee = 0.100;
@@ -85,10 +125,9 @@ class SettingsService extends ChangeNotifier {
     llmVisionProfileId = llmProfiles.first.id;
     llmTextProfileId = llmProfiles.last.id;
     notifyListeners();
-    _saveToDisk();
+    _runAfterInit(() => _saveToDisk());
   }
 
-  /// 鎭㈠榛樿蹇嵎閿?
   void resetShortcuts() {
     shortcutBuy = 'S';
     shortcutSell = 'B';
@@ -96,16 +135,13 @@ class SettingsService extends ChangeNotifier {
     shortcutNextBar = '→';
     shortcutPrevBar = '←';
     notifyListeners();
-    _saveToDisk();
+    _runAfterInit(() => _saveToDisk());
   }
 
-  /// 淇濆瓨鎵€鏈夎缃?
   void save() {
     notifyListeners();
-    _saveToDisk();
+    _runAfterInit(() => _saveToDisk());
   }
-
-  // ===== 鎸佷箙鍖?=====
 
   Future<String> get _filePath async {
     final dir = await getApplicationSupportDirectory();
@@ -116,9 +152,9 @@ class SettingsService extends ChangeNotifier {
     try {
       final path = await _filePath;
       final file = File(path);
-      bool fileHasLlmConfig = false;
       if (await file.exists()) {
-        final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        final json =
+            jsonDecode(await file.readAsString()) as Map<String, dynamic>;
 
         appThemeMode = json['appThemeMode'] as String? ?? 'light';
         chartThemeMode = json['chartThemeMode'] as String? ?? 'dark';
@@ -137,73 +173,69 @@ class SettingsService extends ChangeNotifier {
 
         spotMakerFee = (json['spotMakerFee'] as num?)?.toDouble() ?? 0.050;
         spotTakerFee = (json['spotTakerFee'] as num?)?.toDouble() ?? 0.100;
-        futuresMakerFee = (json['futuresMakerFee'] as num?)?.toDouble() ?? 0.025;
-        futuresTakerFee = (json['futuresTakerFee'] as num?)?.toDouble() ?? 0.050;
+        futuresMakerFee =
+            (json['futuresMakerFee'] as num?)?.toDouble() ?? 0.025;
+        futuresTakerFee =
+            (json['futuresTakerFee'] as num?)?.toDouble() ?? 0.050;
         dataCacheDir = json['dataCacheDir'] as String? ?? '';
-        fileHasLlmConfig = _hasLlmSettings(json);
-        _applyLlmSettingsMap(json);
+        // 大模型配置仅从数据库加载，不读配置文件
 
         shortcutBuy = json['shortcutBuy'] as String? ?? 'S';
         shortcutSell = json['shortcutSell'] as String? ?? 'B';
         shortcutClose = json['shortcutClose'] as String? ?? 'P';
         shortcutNextBar = json['shortcutNextBar'] as String? ?? '→';
         shortcutPrevBar = json['shortcutPrevBar'] as String? ?? '←';
-
       }
+      // 大模型配置只从数据库加载
       final dbLlm = await _db.loadLlmConfigSnapshot();
-      if (dbLlm != null && !fileHasLlmConfig) {
+      if (dbLlm != null) {
         _applyLlmSettingsMap(dbLlm);
       }
       _ensureLlmProfileBindings();
       notifyListeners();
     } catch (e) {
-      debugPrint('鍔犺浇璁剧疆澶辫触: $e');
+      debugPrint('Load settings failed: $e');
     }
   }
 
   Future<void> _saveToDisk() async {
-    try {
-      final path = await _filePath;
-      final file = File(path);
-      await file.writeAsString(jsonEncode({
-        'appThemeMode': appThemeMode,
-        'chartThemeMode': chartThemeMode,
-        'priceColorMode': priceColorMode,
-        'isOnlineMode': isOnlineMode,
-        'initialKlineCount': initialKlineCount,
-        'minReservedKlines': minReservedKlines,
-        'allowedMarkets': allowedMarkets.toList(),
-        'allowedPeriods': allowedPeriods.toList(),
-        'spotMakerFee': spotMakerFee,
-        'spotTakerFee': spotTakerFee,
-        'futuresMakerFee': futuresMakerFee,
-        'futuresTakerFee': futuresTakerFee,
-        'dataCacheDir': dataCacheDir,
-        'llmProvider': llmProvider,
-        'llmApiKey': llmApiKey,
-        'llmEndpoint': llmEndpoint,
-        'llmModel': llmModel,
-        'llmProfiles': llmProfiles.map((e) => e.toJson()).toList(),
-        'llmVisionProfileId': llmVisionProfileId,
-        'llmTextProfileId': llmTextProfileId,
-        'shortcutBuy': shortcutBuy,
-        'shortcutSell': shortcutSell,
-        'shortcutClose': shortcutClose,
-        'shortcutNextBar': shortcutNextBar,
-        'shortcutPrevBar': shortcutPrevBar,
-      }));
-    } catch (e) {
-      debugPrint('Save settings file failed: $e');
-    }
-
+    // 大模型配置只写入数据库，不写入配置文件
     try {
       await _db.saveLlmConfigSnapshot(_buildLlmSettingsMap());
     } catch (e) {
       debugPrint('Save llm config snapshot failed: $e');
     }
+
+    try {
+      final path = await _filePath;
+      final file = File(path);
+      await file.writeAsString(
+        jsonEncode({
+          'appThemeMode': appThemeMode,
+          'chartThemeMode': chartThemeMode,
+          'priceColorMode': priceColorMode,
+          'isOnlineMode': isOnlineMode,
+          'initialKlineCount': initialKlineCount,
+          'minReservedKlines': minReservedKlines,
+          'allowedMarkets': allowedMarkets.toList(),
+          'allowedPeriods': allowedPeriods.toList(),
+          'spotMakerFee': spotMakerFee,
+          'spotTakerFee': spotTakerFee,
+          'futuresMakerFee': futuresMakerFee,
+          'futuresTakerFee': futuresTakerFee,
+          'dataCacheDir': dataCacheDir,
+          'shortcutBuy': shortcutBuy,
+          'shortcutSell': shortcutSell,
+          'shortcutClose': shortcutClose,
+          'shortcutNextBar': shortcutNextBar,
+          'shortcutPrevBar': shortcutPrevBar,
+        }),
+      );
+    } catch (e) {
+      debugPrint('Save settings file failed: $e');
+    }
   }
 
-  /// 灏嗗揩鎹烽敭瀛楃涓茶浆涓?LogicalKeyboardKey
   LogicalKeyboardKey? getKeyForShortcut(String shortcut) {
     if (shortcut == '→') return LogicalKeyboardKey.arrowRight;
     if (shortcut == '←') return LogicalKeyboardKey.arrowLeft;
@@ -213,14 +245,12 @@ class SettingsService extends ChangeNotifier {
       final lower = shortcut.toLowerCase();
       final code = lower.codeUnitAt(0);
       if (code >= 97 && code <= 122) {
-        // a-z
         return LogicalKeyboardKey(code - 97 + 0x00000061);
       }
     }
     return null;
   }
 
-  /// 灏?LogicalKeyboardKey 杞负鏄剧ず瀛楃涓?
   static String keyToLabel(LogicalKeyboardKey key) {
     if (key == LogicalKeyboardKey.arrowRight) return '→';
     if (key == LogicalKeyboardKey.arrowLeft) return '←';
@@ -262,17 +292,9 @@ class SettingsService extends ChangeNotifier {
     };
   }
 
-  bool _hasLlmSettings(Map<String, dynamic> json) {
-    return json.containsKey('llmProfiles') ||
-        json.containsKey('llmVisionProfileId') ||
-        json.containsKey('llmTextProfileId') ||
-        json.containsKey('llmApiKey') ||
-        json.containsKey('llmModel');
-  }
-
   List<LlmProfile> _buildDefaultProfiles() {
-    return const [
-      LlmProfile(
+    return [
+      const LlmProfile(
         id: 'default_vision',
         name: 'Zhipu Vision Default',
         provider: 'zhipu',
@@ -282,7 +304,7 @@ class SettingsService extends ChangeNotifier {
         supportsVision: true,
         supportsText: false,
       ),
-      LlmProfile(
+      const LlmProfile(
         id: 'default_text',
         name: 'Zhipu Text Default',
         provider: 'zhipu',
@@ -318,12 +340,14 @@ class SettingsService extends ChangeNotifier {
       llmProfiles = _buildDefaultProfiles();
     }
     if (llmProfiles.every((e) => e.id != llmVisionProfileId)) {
-      llmVisionProfileId =
-          llmProfiles.firstWhere((e) => e.supportsVision, orElse: () => llmProfiles.first).id;
+      llmVisionProfileId = llmProfiles
+          .firstWhere((e) => e.supportsVision, orElse: () => llmProfiles.first)
+          .id;
     }
     if (llmProfiles.every((e) => e.id != llmTextProfileId)) {
-      llmTextProfileId =
-          llmProfiles.firstWhere((e) => e.supportsText, orElse: () => llmProfiles.first).id;
+      llmTextProfileId = llmProfiles
+          .firstWhere((e) => e.supportsText, orElse: () => llmProfiles.first)
+          .id;
     }
 
     final vision = llmProfiles.firstWhere(
@@ -331,16 +355,18 @@ class SettingsService extends ChangeNotifier {
       orElse: () => llmProfiles.first,
     );
     if (!vision.supportsVision) {
-      llmVisionProfileId =
-          llmProfiles.firstWhere((e) => e.supportsVision, orElse: () => llmProfiles.first).id;
+      llmVisionProfileId = llmProfiles
+          .firstWhere((e) => e.supportsVision, orElse: () => llmProfiles.first)
+          .id;
     }
     final text = llmProfiles.firstWhere(
       (e) => e.id == llmTextProfileId,
       orElse: () => llmProfiles.first,
     );
     if (!text.supportsText) {
-      llmTextProfileId =
-          llmProfiles.firstWhere((e) => e.supportsText, orElse: () => llmProfiles.first).id;
+      llmTextProfileId = llmProfiles
+          .firstWhere((e) => e.supportsText, orElse: () => llmProfiles.first)
+          .id;
     }
     _syncLegacyLlmFieldsWithVisionProfile();
   }
@@ -378,17 +404,15 @@ class SettingsService extends ChangeNotifier {
   List<LlmProfile> get textEnabledProfiles =>
       llmProfiles.where((e) => e.supportsText).toList();
 
-  void setTaskProfileBinding({
-    String? visionProfileId,
-    String? textProfileId,
-  }) {
+  void setTaskProfileBinding({String? visionProfileId, String? textProfileId}) {
     if (visionProfileId != null) llmVisionProfileId = visionProfileId;
     if (textProfileId != null) llmTextProfileId = textProfileId;
     _ensureLlmProfileBindings();
     save();
   }
 
-  void upsertLlmProfile(LlmProfile profile) {
+  /// 新增或更新模型配置，并立即写入数据库（含 API Key），失败会抛出异常
+  Future<void> upsertLlmProfile(LlmProfile profile) async {
     final idx = llmProfiles.indexWhere((e) => e.id == profile.id);
     if (idx >= 0) {
       llmProfiles[idx] = profile;
@@ -396,14 +420,17 @@ class SettingsService extends ChangeNotifier {
       llmProfiles.add(profile);
     }
     _ensureLlmProfileBindings();
-    save();
+    notifyListeners();
+    await persistLlmConfig();
+    save(); // 再触发一次，保证其他配置也写入
   }
 
-  void removeLlmProfile(String id) {
+  Future<void> removeLlmProfile(String id) async {
     if (llmProfiles.length <= 1) return;
     llmProfiles.removeWhere((e) => e.id == id);
     _ensureLlmProfileBindings();
+    notifyListeners();
+    await persistLlmConfig();
     save();
   }
 }
-
