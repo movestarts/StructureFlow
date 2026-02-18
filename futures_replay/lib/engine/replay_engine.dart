@@ -14,6 +14,9 @@ class ReplayEngine extends ChangeNotifier {
   Timer? _timer;
   Duration _tickDuration = const Duration(milliseconds: 500);
   
+  // 推进模式：true=按周期推进，false=按源K线推进
+  bool _advanceByPeriod = true;
+  
   // History stack for Undo
   final List<int> _indexHistory = [];
   
@@ -47,6 +50,13 @@ class ReplayEngine extends ChangeNotifier {
   int get currentSpeedMs => _tickDuration.inMilliseconds;
   
   Period get viewPeriod => _viewPeriod;
+  
+  bool get advanceByPeriod => _advanceByPeriod;
+  
+  void setAdvanceMode(bool byPeriod) {
+    _advanceByPeriod = byPeriod;
+    notifyListeners();
+  }
 
   void play() {
     if (_isPlaying || isFinished) return;
@@ -103,7 +113,13 @@ class ReplayEngine extends ChangeNotifier {
   }
 
   void _startTimer() {
-    _timer = Timer.periodic(_tickDuration, (_) => next());
+    _timer = Timer.periodic(_tickDuration, (_) {
+      if (_advanceByPeriod) {
+        nextBar();
+      } else {
+        next();
+      }
+    });
   }
 
   /// Full Rebuild of the state up to _currentIndex.
@@ -140,7 +156,7 @@ class ReplayEngine extends ChangeNotifier {
     // Actually, simpler model: Last bar is ALWAYS _ghostBar.
     // Bars before it are _completedKlines.
     
-    if (aggregated.length > 0) {
+    if (aggregated.isNotEmpty) {
       _completedKlines = aggregated.sublist(0, aggregated.length - 1);
       _ghostBar = aggregated.last;
     } else {
@@ -211,32 +227,26 @@ class ReplayEngine extends ChangeNotifier {
       attempts++;
     }
     
+    _refreshDisplayCache();
     notifyListeners();
   }
   
   /// Duplicate logic from DataService to avoid dependency loop or complexity
   bool _isSamePeriod(DateTime start, DateTime current, Period p) {
-    if (p == Period.m5) return true; // Fallback or strict 5m logic
-
-    final periodMinutes = p.minutes;
-    
-    final startTotalMinutes = start.year * 525600 + 
-                              start.month * 43800 + 
-                              start.day * 1440 + 
-                              start.hour * 60 + 
-                              start.minute;
-    
-    final currentTotalMinutes = current.year * 525600 + 
-                                current.month * 43800 + 
-                                current.day * 1440 + 
-                                current.hour * 60 + 
-                                current.minute;
-    
-    final startBucket = startTotalMinutes ~/ periodMinutes;
-    final currentBucket = currentTotalMinutes ~/ periodMinutes;
-    
-    return startBucket == currentBucket;
-  }
+  final periodMinutes = p.minutes;
+  
+  // Normalize to start of minute to avoid second/milli issues
+  final normalizedStart = DateTime(start.year, start.month, start.day, start.hour, start.minute);
+  final normalizedCurrent = DateTime(current.year, current.month, current.day, current.hour, current.minute);
+  
+  final startTotalMinutes = normalizedStart.millisecondsSinceEpoch ~/ (60 * 1000);
+  final currentTotalMinutes = normalizedCurrent.millisecondsSinceEpoch ~/ (60 * 1000);
+  
+  final startBucket = startTotalMinutes ~/ periodMinutes;
+  final currentBucket = currentTotalMinutes ~/ periodMinutes;
+  
+  return startBucket == currentBucket;
+}
   
   @override
   void dispose() {

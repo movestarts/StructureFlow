@@ -1,0 +1,13 @@
+name: czsc_dart
+description: 缠中说禅技术分析工具 - Dart版本，支持K线分型、笔、中枢识别
+version: 1.0.0
+homepage: https://github.com/waditu/czsc
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  collection: ^1.18.0
+
+dev_dependencies:
+  test: ^1.24.0

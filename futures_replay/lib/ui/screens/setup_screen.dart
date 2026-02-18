@@ -3,6 +3,8 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io'; // Added
 import 'package:path_provider/path_provider.dart'; // Added
 import '../../services/data_service.dart';
+import '../../services/database_service.dart';
+import '../../services/builtin_data_service.dart';
 import '../../models/kline_model.dart';
 import '../../models/period.dart';
 import '../theme/app_theme.dart';
@@ -13,7 +15,7 @@ import 'package:intl/intl.dart';
 class SetupScreen extends StatefulWidget {
   final TrainingType trainingType;
 
-  const SetupScreen({Key? key, required this.trainingType}) : super(key: key);
+  const SetupScreen({super.key, required this.trainingType});
 
   @override
   State<SetupScreen> createState() => _SetupScreenState();
@@ -332,6 +334,10 @@ class _SetupScreenState extends State<SetupScreen> {
         ),
         const SizedBox(height: 8),
 
+        // 显示内置数据列表 (优先显示)
+        if (_allData.isEmpty && _marketTab == 1)
+          _buildBuiltinDataList(),
+
         // 显示缓存文件列表 (当未选择文件时)
         if (_allData.isEmpty)
           _buildCachedFileList(),
@@ -398,6 +404,108 @@ class _SetupScreenState extends State<SetupScreen> {
     );
   }
 
+  Widget _buildBuiltinDataList() {
+    final builtinService = BuiltinDataService();
+    final builtinSymbols = builtinService.getBuiltinSymbols();
+    
+    if (builtinSymbols.isEmpty) return const SizedBox.shrink();
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+        boxShadow: [
+          BoxShadow(color: AppColors.primary.withOpacity(0.1), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Icon(Icons.star, color: AppColors.primary, size: 18),
+                const SizedBox(width: 8),
+                const Text(
+                  '内置示例数据',
+                  style: TextStyle(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            itemCount: builtinSymbols.length,
+            separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16),
+            itemBuilder: (context, index) {
+              final symbol = builtinSymbols[index];
+              return ListTile(
+                dense: true,
+                leading: const Icon(Icons.data_object, color: AppColors.success, size: 20),
+                title: Text(
+                  symbol.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                subtitle: Text(
+                  symbol.description,
+                  style: const TextStyle(fontSize: 12, color: AppColors.lightTextMuted),
+                ),
+                trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.lightTextMuted),
+                onTap: () => _loadBuiltinData(symbol),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadBuiltinData(BuiltinSymbol symbol) async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+      _selectedFileName = symbol.name;
+    });
+
+    try {
+      final db = DatabaseService();
+      final data = await db.getKlines(symbol.symbol, symbol.period);
+
+      if (data.isEmpty) {
+        setState(() {
+          _error = '内置数据为空，请重启应用重新导入';
+          _isLoading = false;
+          _selectedFileName = null;
+        });
+        return;
+      }
+
+      setState(() {
+        _allData = data;
+        _instrumentCode = symbol.symbol;
+        _searchController.text = symbol.name;
+        _isLoading = false;
+        _selectedFilePath = null; // 标记为内置数据
+      });
+    } catch (e) {
+      setState(() {
+        _error = '加载失败: $e';
+        _isLoading = false;
+        _selectedFileName = null;
+      });
+    }
+  }
+
   Widget _buildCachedFileList() {
     if (_cachedFiles.isEmpty) return const SizedBox.shrink();
     
@@ -424,7 +532,30 @@ class _SetupScreenState extends State<SetupScreen> {
            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2)),
         ],
       ),
-      child: ListView.separated(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Icon(Icons.folder_open, color: AppColors.lightTextSecondary, size: 18),
+                const SizedBox(width: 8),
+                const Text(
+                  '本地缓存文件',
+                  style: TextStyle(
+                    color: AppColors.lightTextSecondary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Flexible(
+            child: ListView.separated(
         shrinkWrap: true,
         padding: EdgeInsets.zero,
         itemCount: displayList.length,
@@ -454,6 +585,9 @@ class _SetupScreenState extends State<SetupScreen> {
             },
           );
         },
+      ),
+          ),
+        ],
       ),
     );
   }
@@ -741,7 +875,7 @@ class _SetupScreenState extends State<SetupScreen> {
           Switch(
             value: _enableStopLoss,
             onChanged: (v) => setState(() => _enableStopLoss = v),
-            activeColor: AppColors.primary,
+            activeThumbColor: AppColors.primary,
           ),
         ],
       ),
@@ -821,6 +955,7 @@ class _SetupScreenState extends State<SetupScreen> {
             initialPeriod: _selectedPeriod,
             spotOnly: isSpotOnly,
             csvPath: _selectedFilePath,
+            initialLandscape: _displayMode == 1, // 1=横屏
           ),
         ),
       ),

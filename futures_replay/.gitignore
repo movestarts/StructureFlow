@@ -44,3 +44,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# 脚本打包产物，体积大不推送
+scripts/dist/

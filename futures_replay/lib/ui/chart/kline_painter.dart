@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
 import '../../models/kline_model.dart';
-import '../../models/trade_model.dart';
+import '../../models/trade_model.dart' as trade_model;
 import '../../services/indicator_service.dart';
 import '../../ui/theme/app_theme.dart';
 import 'chart_view_controller.dart';
+import 'package:czsc_dart/czsc_dart.dart' as czsc;
 
 /// 主图指标类型
-enum MainIndicatorType { ma, ema, boll }
+enum MainIndicatorType { ma, ema, boll, czsc }
 
 class KlinePainter extends CustomPainter {
   final List<KlineModel> allData;
-  final List<Trade> allTrades;
+  final List<trade_model.Trade> allTrades;
   final ChartViewController viewController;
   final double currentPrice;
 
@@ -21,6 +22,9 @@ class KlinePainter extends CustomPainter {
 
   // BOLL数据
   final BOLLResult? bollData;
+
+  // CZSC数据
+  final CZSCResult? czscData;
 
   // 显示控制
   final MainIndicatorType mainIndicator;
@@ -41,6 +45,7 @@ class KlinePainter extends CustomPainter {
     this.ma10 = const [],
     this.ma20 = const [],
     this.bollData,
+    this.czscData,
     this.mainIndicator = MainIndicatorType.boll,
   });
 
@@ -119,6 +124,16 @@ class KlinePainter extends CustomPainter {
         _drawMALine(canvas, startIdx, endIdx, step, getY, ma20,
             Paint()..color = AppColors.ma20..strokeWidth = 1.0..style = PaintingStyle.stroke);
       }
+    }
+
+    // ===== 绘制CZSC中枢 =====
+    if (mainIndicator == MainIndicatorType.czsc && czscData != null && _isCzscDataValid()) {
+      _drawZsList(canvas, startIdx, endIdx, step, getY, chartHeight);
+    }
+
+    // ===== 绘制CZSC笔 =====
+    if (mainIndicator == MainIndicatorType.czsc && czscData != null && _isCzscDataValid()) {
+      _drawBiList(canvas, startIdx, endIdx, step, getY);
     }
 
     // ===== 绘制K线 =====
@@ -219,7 +234,7 @@ class KlinePainter extends CustomPainter {
       final y = getY(trade.entryPrice);
       if (y < 0 || y > chartHeight) continue;
 
-      final color = trade.direction == Direction.long
+      final color = trade.direction == trade_model.Direction.long
           ? AppColors.bullishBright
           : AppColors.bearishBright;
 
@@ -265,7 +280,7 @@ class KlinePainter extends CustomPainter {
         final x = visibleIdx * step + step / 2;
         
         // Long Entry = BUY, Short Entry = SELL
-        final isBuy = trade.direction == Direction.long;
+        final isBuy = trade.direction == trade_model.Direction.long;
         final y = isBuy ? getY(kline.low) : getY(kline.high);
         
         _drawMarkerBadge(canvas, x, y, isBuy, isBuy ? "BUY" : "SELL", true);
@@ -281,7 +296,7 @@ class KlinePainter extends CustomPainter {
            final x = visibleIdx * step + step / 2;
            
            // Long Exit = SELL (to close), Short Exit = BUY (to close)
-           final isLongTrade = trade.direction == Direction.long;
+           final isLongTrade = trade.direction == trade_model.Direction.long;
            final isBuyAction = !isLongTrade; // Exit Long -> Sell (false), Exit Short -> Buy (true)
            
            final y = isBuyAction ? getY(kline.low) : getY(kline.high);
@@ -440,7 +455,166 @@ class KlinePainter extends CustomPainter {
         tp.layout();
         tp.paint(canvas, Offset(offsetX, 5));
       }
+    } else if (mainIndicator == MainIndicatorType.czsc && czscData != null) {
+      if (_isCzscDataValid()) {
+        final dataCount = allData.length > 1000 ? '最近1000根' : '${allData.length}根';
+        tp.text = TextSpan(children: [
+          TextSpan(text: 'CZSC($dataCount): ', style: TextStyle(color: AppColors.textMuted, fontSize: 10)),
+          TextSpan(text: '笔:${czscData!.biList.length} ', style: TextStyle(color: Color(0xFFFFD700), fontSize: 10)),
+          TextSpan(text: '中枢:${czscData!.zsList.length}', style: TextStyle(color: Color(0xFF00CED1), fontSize: 10)),
+        ]);
+        tp.layout();
+        tp.paint(canvas, Offset(offsetX, 5));
+      } else {
+        // 数据无效，显示提示
+        tp.text = TextSpan(children: [
+          TextSpan(text: 'CZSC: ', style: TextStyle(color: AppColors.textMuted, fontSize: 10)),
+          TextSpan(text: '正在计算...', style: TextStyle(color: Colors.orange, fontSize: 10)),
+        ]);
+        tp.layout();
+        tp.paint(canvas, Offset(offsetX, 5));
+      }
     }
+  }
+
+  /// 绘制笔列表
+  void _drawBiList(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY) {
+    if (czscData == null || czscData!.biList.isEmpty) return;
+
+    final biPaint = Paint()
+      ..color = Color(0xFFFFD700) // 金色
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    // 性能优化：只绘制可见范围附近的笔（提前结束遍历）
+    int drawnCount = 0;
+    const maxDrawnBi = 100; // 最多绘制100条笔，避免过度绘制
+
+    for (final bi in czscData!.biList.reversed) {
+      if (drawnCount >= maxDrawnBi) break;
+
+      // 找到起始和结束K线的索引
+      final startBarIdx = _findBarIndexByTime(bi.sdt);
+      final endBarIdx = _findBarIndexByTime(bi.edt);
+
+      if (startBarIdx == -1 || endBarIdx == -1) continue;
+      
+      // 检查笔是否在可见范围内（扩展一点范围以保证连续性）
+      if (endBarIdx < startIdx - 10) continue; // 完全在左侧之外，跳过
+      if (startBarIdx > endIdx + 10) continue; // 完全在右侧之外，跳过
+
+      drawnCount++;
+
+      // 计算笔的起点和终点坐标
+      final visibleStartIdx = startBarIdx - startIdx;
+      final visibleEndIdx = endBarIdx - startIdx;
+
+      final x1 = visibleStartIdx.clamp(0, endIdx - startIdx - 1).toDouble() * step + step / 2;
+      final x2 = visibleEndIdx.clamp(0, endIdx - startIdx - 1).toDouble() * step + step / 2;
+      final y1 = getY(bi.direction == czsc.Direction.up ? bi.low : bi.high);
+      final y2 = getY(bi.direction == czsc.Direction.up ? bi.high : bi.low);
+
+      canvas.drawLine(Offset(x1, y1), Offset(x2, y2), biPaint);
+
+      // 绘制端点标记
+      final pointPaint = Paint()
+        ..color = bi.direction == czsc.Direction.up ? AppColors.bullish : AppColors.bearish
+        ..style = PaintingStyle.fill;
+
+      canvas.drawCircle(Offset(x1, y1), 3, pointPaint);
+      canvas.drawCircle(Offset(x2, y2), 3, pointPaint);
+    }
+  }
+
+  /// 绘制中枢列表
+  void _drawZsList(Canvas canvas, int startIdx, int endIdx, double step, double Function(double) getY, double chartHeight) {
+    if (czscData == null || czscData!.zsList.isEmpty) return;
+
+    final zsPaint = Paint()
+      ..color = Color(0xFF00CED1).withOpacity(0.2) // 青色半透明
+      ..style = PaintingStyle.fill;
+
+    final zsBorderPaint = Paint()
+      ..color = Color(0xFF00CED1)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+
+    // 性能优化：只绘制可见范围附近的中枢
+    for (final zs in czscData!.zsList.reversed) {
+      // 找到中枢起始和结束K线的索引
+      final zsStartIdx = _findBarIndexByTime(zs.sdt);
+      final zsEndIdx = _findBarIndexByTime(zs.edt);
+
+      if (zsStartIdx == -1 || zsEndIdx == -1) continue;
+
+      // 检查中枢是否在可见范围内（扩展一点范围）
+      if (zsEndIdx < startIdx - 10) continue; // 完全在左侧之外
+      if (zsStartIdx > endIdx + 10) continue; // 完全在右侧之外
+
+      // 计算中枢的绘制位置
+      final visibleStartIdx = (zsStartIdx - startIdx).clamp(0, endIdx - startIdx - 1);
+      final visibleEndIdx = (zsEndIdx - startIdx).clamp(0, endIdx - startIdx - 1);
+
+      final left = visibleStartIdx.toDouble() * step;
+      final right = (visibleEndIdx + 1).toDouble() * step;
+      final top = getY(zs.zg).clamp(0.0, chartHeight);
+      final bottom = getY(zs.zd).clamp(0.0, chartHeight);
+
+      final rect = Rect.fromLTRB(left, top, right, bottom);
+      canvas.drawRect(rect, zsPaint);
+      canvas.drawRect(rect, zsBorderPaint);
+
+      // 绘制中轴线
+      final zzY = getY(zs.zz).clamp(0.0, chartHeight);
+      final zzPaint = Paint()
+        ..color = Color(0xFF00CED1).withOpacity(0.5)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+
+      double dx = left;
+      while (dx < right) {
+        canvas.drawLine(Offset(dx, zzY), Offset((dx + 4).clamp(dx, right), zzY), zzPaint);
+        dx += 8;
+      }
+    }
+  }
+
+  /// 根据时间查找K线索引
+  int _findBarIndexByTime(DateTime time) {
+    for (int i = 0; i < allData.length; i++) {
+      if (allData[i].time.isAtSameMomentAs(time)) {
+        return i;
+      }
+      if (allData[i].time.isAfter(time)) {
+        return i > 0 ? i - 1 : 0;
+      }
+    }
+    return allData.isNotEmpty ? allData.length - 1 : -1;
+  }
+
+  /// 检查CZSC数据是否有效
+  /// 防止切换周期后使用旧数据导致显示异常
+  bool _isCzscDataValid() {
+    if (czscData == null || allData.isEmpty) return false;
+    
+    // 如果CZSC数据为空，跳过
+    if (czscData!.biList.isEmpty && czscData!.zsList.isEmpty) return false;
+    
+    // 检查CZSC数据的时间范围是否在当前K线数据范围内
+    if (czscData!.biList.isNotEmpty) {
+      final firstBi = czscData!.biList.first;
+      final lastBi = czscData!.biList.last;
+      final firstKlineTime = allData.first.time;
+      final lastKlineTime = allData.last.time;
+      
+      // 如果笔的时间范围完全不在当前K线范围内，说明是旧数据
+      if (lastBi.edt.isBefore(firstKlineTime) || firstBi.sdt.isAfter(lastKlineTime)) {
+        return false;
+      }
+    }
+    
+    return true;
   }
 
   @override
@@ -452,6 +626,7 @@ class KlinePainter extends CustomPainter {
         old.ma10 != ma10 ||
         old.ma20 != ma20 ||
         old.bollData != bollData ||
+        old.czscData != czscData ||
         old.mainIndicator != mainIndicator ||
         old.viewController.visibleStartIndex != viewController.visibleStartIndex ||
         old.viewController.visibleEndIndex != viewController.visibleEndIndex ||

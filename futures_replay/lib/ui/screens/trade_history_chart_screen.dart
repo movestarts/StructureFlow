@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:csv/csv.dart';
 import 'dart:convert';
 import '../theme/app_theme.dart';
@@ -19,7 +20,7 @@ import '../../models/period.dart';
 import 'package:intl/intl.dart' show DateFormat;
 
 /// 副图指标类型 (与 main_screen 保持一致)
-enum _SubIndicator { vol, macd, kdj, rsi, wr }
+enum _SubIndicator { vol, macd, kdj, rsi, wr, adx }
 
 /// 交易历史 K线回看页面
 class TradeHistoryChartScreen extends StatefulWidget {
@@ -48,10 +49,12 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
   List<double?> _ma10 = [];
   List<double?> _ma20 = [];
   BOLLResult _bollData = BOLLResult(upper: [], middle: [], lower: []);
+  CZSCResult _czscData = CZSCResult(biList: [], zsList: [], fxList: []);
   MACDResult _macdData = MACDResult(dif: [], dea: [], macdBar: []);
   KDJResult _kdjData = KDJResult(k: [], d: [], j: []);
   List<double?> _rsiData = [];
   List<double?> _wrData = [];
+  ADXResult _adxData = ADXResult(adx: [], pdi: [], mdi: []);
   List<double?> _volMa5 = [];
   List<double?> _volMa10 = [];
 
@@ -178,10 +181,12 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
     _ma10 = _indicatorService.calculateMA(_allData, 10);
     _ma20 = _indicatorService.calculateMA(_allData, 20);
     _bollData = _indicatorService.calculateBOLL(_allData);
+    _czscData = _indicatorService.calculateCZSC(_allData, widget.sessionTrades.first.instrumentCode);
     _macdData = _indicatorService.calculateMACD(_allData);
     _kdjData = _indicatorService.calculateKDJ(_allData);
     _rsiData = _indicatorService.calculateRSI(_allData);
     _wrData = _indicatorService.calculateWR(_allData);
+    _adxData = _indicatorService.calculateADX(_allData);
     _volMa5 = _indicatorService.calculateVolumeMA(_allData, 5);
     _volMa10 = _indicatorService.calculateVolumeMA(_allData, 10);
   }
@@ -322,42 +327,55 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
           });
         }
 
-        return GestureDetector(
-          onHorizontalDragStart: (_) => _chartController.onDragStart(),
-          onHorizontalDragUpdate: (d) {
-            if (_chartController.isUserDragging) {
-              _chartController.onDragUpdate(d.delta.dx);
+        return Listener(
+          onPointerSignal: (event) {
+            if (event is PointerScrollEvent) {
+              // 鼠标滚轮事件
+              // scrollDelta.dy > 0 = 向下滚 = 缩小
+              // scrollDelta.dy < 0 = 向上滚 = 放大
+              final delta = event.scrollDelta.dy;
+              final zoomFactor = delta > 0 ? 0.9 : 1.1; // 每次缩放10%
+              _chartController.setScale(_chartController.scale * zoomFactor);
             }
           },
-          onHorizontalDragEnd: (_) => _chartController.onDragEnd(),
-          onScaleUpdate: (details) {
-            if (details.scale != 1.0) {
-              _chartController.setScale(_chartController.scale * details.scale);
-            }
-          },
-          child: ListenableBuilder(
-            listenable: _chartController,
-            builder: (context, _) {
-              return Container(
-                color: AppColors.bgOverlay,
-                width: double.infinity,
-                child: _isInitialized
-                    ? CustomPaint(
-                        painter: KlinePainter(
-                          allData: _allData,
-                          allTrades: _fakeTrades,
-                          viewController: _chartController,
-                          currentPrice: _allData.isNotEmpty ? _allData.last.close : 0,
-                          ma5: _ma5,
-                          ma10: _ma10,
-                          ma20: _ma20,
-                          bollData: _bollData,
-                          mainIndicator: _mainIndicator,
-                        ),
-                      )
-                    : const Center(child: CircularProgressIndicator(color: AppColors.primary)),
-              );
+          child: GestureDetector(
+            onHorizontalDragStart: (_) => _chartController.onDragStart(),
+            onHorizontalDragUpdate: (d) {
+              if (_chartController.isUserDragging) {
+                _chartController.onDragUpdate(d.delta.dx);
+              }
             },
+            onHorizontalDragEnd: (_) => _chartController.onDragEnd(),
+            onScaleUpdate: (details) {
+              if (details.scale != 1.0) {
+                _chartController.setScale(_chartController.scale * details.scale);
+              }
+            },
+            child: ListenableBuilder(
+              listenable: _chartController,
+              builder: (context, _) {
+                return Container(
+                  color: AppColors.bgOverlay,
+                  width: double.infinity,
+                  child: _isInitialized
+                      ? CustomPaint(
+                          painter: KlinePainter(
+                            allData: _allData,
+                            allTrades: _fakeTrades,
+                            viewController: _chartController,
+                            currentPrice: _allData.isNotEmpty ? _allData.last.close : 0,
+                            ma5: _ma5,
+                            ma10: _ma10,
+                            ma20: _ma20,
+                            bollData: _bollData,
+                            czscData: _czscData,
+                            mainIndicator: _mainIndicator,
+                          ),
+                        )
+                      : const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+                );
+              },
+            ),
           ),
         );
       },
@@ -410,6 +428,9 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
                 break;
               case _SubIndicator.wr:
                 painter = createWRPainter(wrData: _wrData, viewController: _chartController, dataLength: _allData.length);
+                break;
+              case _SubIndicator.adx:
+                painter = createADXPainter(adxData: _adxData, viewController: _chartController, dataLength: _allData.length);
                 break;
               default:
                 painter = createKDJPainter(kdjData: _kdjData, viewController: _chartController, dataLength: _allData.length);
@@ -473,6 +494,7 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
             _buildIndicatorTab('MA', _mainIndicator == MainIndicatorType.ma, () => setState(() => _mainIndicator = MainIndicatorType.ma)),
             _buildIndicatorTab('EMA', _mainIndicator == MainIndicatorType.ema, () => setState(() => _mainIndicator = MainIndicatorType.ema)),
             _buildIndicatorTab('BOLL', _mainIndicator == MainIndicatorType.boll, () => setState(() => _mainIndicator = MainIndicatorType.boll)),
+            _buildIndicatorTab('CZSC', _mainIndicator == MainIndicatorType.czsc, () => setState(() => _mainIndicator = MainIndicatorType.czsc)),
             Container(width: 1, height: 14, color: AppColors.border, margin: const EdgeInsets.symmetric(horizontal: 4)),
             // 副图指标
             _buildIndicatorTab('VOL', _subIndicator == _SubIndicator.vol, () => setState(() => _subIndicator = _SubIndicator.vol)),
@@ -480,6 +502,7 @@ class _TradeHistoryChartScreenState extends State<TradeHistoryChartScreen> {
             _buildIndicatorTab('KDJ', _subIndicator == _SubIndicator.kdj, () => setState(() => _subIndicator = _SubIndicator.kdj)),
             _buildIndicatorTab('RSI', _subIndicator == _SubIndicator.rsi, () => setState(() => _subIndicator = _SubIndicator.rsi)),
             _buildIndicatorTab('WR', _subIndicator == _SubIndicator.wr, () => setState(() => _subIndicator = _SubIndicator.wr)),
+            _buildIndicatorTab('ADX', _subIndicator == _SubIndicator.adx, () => setState(() => _subIndicator = _SubIndicator.adx)),
           ],
         ),
       ),

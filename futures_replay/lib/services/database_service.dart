@@ -7,7 +7,6 @@ import 'dart:io';
 
 import '../models/kline_entity.dart';
 import '../models/kline_model.dart';
-import '../models/period.dart';
 import '../models/ai_review_record.dart';
 import '../models/trade_record.dart';
 

@@ -53,7 +53,7 @@ class SessionDetailScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('${symbol} ${isFutures ? "合约" : "现货"}', style: const TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold)),
+        title: Text('$symbol ${isFutures ? "合约" : "现货"}', style: const TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold)),
         centerTitle: true,
       ),
       body: Stack(
@@ -165,7 +165,7 @@ class SessionDetailScreen extends StatelessWidget {
                       ],
                     ),
                   );
-                }).toList(),
+                }),
                 
                 const SizedBox(height: 80), // Space for FAB
               ],

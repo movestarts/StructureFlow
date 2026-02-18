@@ -205,3 +205,22 @@ SubChartPainter createWRPainter({
     fixedMax: 0,
   );
 }
+
+SubChartPainter createADXPainter({
+  required ADXResult adxData,
+  required ChartViewController viewController,
+  required int dataLength,
+}) {
+  return SubChartPainter(
+    label: 'ADX(14)',
+    lines: [
+      LineData('ADX', adxData.adx, const Color(0xFF2196F3)), // 蓝色
+      LineData('+DI', adxData.pdi, const Color(0xFF4CAF50)), // 绿色
+      LineData('-DI', adxData.mdi, const Color(0xFFF44336)), // 红色
+    ],
+    viewController: viewController,
+    dataLength: dataLength,
+    fixedMin: 0,
+    fixedMax: 100,
+  );
+}

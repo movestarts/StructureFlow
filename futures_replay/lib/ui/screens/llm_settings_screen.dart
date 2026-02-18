@@ -60,7 +60,7 @@ class LlmSettingsScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 10),
                       DropdownButtonFormField<String>(
-                        value: visionId,
+                        initialValue: visionId,
                         decoration: const InputDecoration(
                           labelText: '图像点评使用模型',
                         ),
@@ -77,7 +77,7 @@ class LlmSettingsScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 10),
                       DropdownButtonFormField<String>(
-                        value: textId,
+                        initialValue: textId,
                         decoration: const InputDecoration(
                           labelText: '文本分析使用模型',
                         ),

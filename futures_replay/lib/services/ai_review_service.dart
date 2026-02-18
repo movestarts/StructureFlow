@@ -111,7 +111,7 @@ class AiReviewService {
     final normalized = _extractFirstValidJsonObject(content);
     final data = jsonDecode(normalized) as Map<String, dynamic>;
     return AiReviewResult(
-      score: ((data['score'] as num?)?.toInt() ?? 0).clamp(0, 100) as int,
+      score: ((data['score'] as num?)?.toInt() ?? 0).clamp(0, 100),
       summary: (data['summary'] as String?) ?? '',
       strengths: _toStringList(data['strengths']),
       risks: _toStringList(data['risks']),

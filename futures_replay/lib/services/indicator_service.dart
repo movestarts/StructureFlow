@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import '../models/kline_model.dart';
+import 'package:czsc_dart/czsc_dart.dart';
 
 /// 技术指标计算服务
 class IndicatorService {
@@ -254,6 +255,198 @@ class IndicatorService {
     return result;
   }
 
+  /// 计算ADX (Average Directional Index) 指标
+  /// 
+  /// 使用威尔德平滑算法（Wilder's Smoothing）
+  /// [data] K线数据
+  /// [period] 周期，默认14
+  /// 
+  /// 返回 ADXResult 包含 adx, pdi (+DI), mdi (-DI) 三个列表
+  ADXResult calculateADX(List<KlineModel> data, {int period = 14}) {
+    List<double?> adxList = [];
+    List<double?> pdiList = [];
+    List<double?> mdiList = [];
+
+    if (data.length < period + 1) {
+      // 数据不足，返回空值
+      for (int i = 0; i < data.length; i++) {
+        adxList.add(null);
+        pdiList.add(null);
+        mdiList.add(null);
+      }
+      return ADXResult(adx: adxList, pdi: pdiList, mdi: mdiList);
+    }
+
+    // 第一个值没有前一根K线，跳过
+    adxList.add(null);
+    pdiList.add(null);
+    mdiList.add(null);
+
+    // 步骤1: 计算 TR, +DM, -DM
+    List<double> trList = [0]; // 第一个值为0（占位）
+    List<double> pdmList = [0]; // +DM
+    List<double> mdmList = [0]; // -DM
+
+    for (int i = 1; i < data.length; i++) {
+      final current = data[i];
+      final previous = data[i - 1];
+
+      // TR = max(high - low, abs(high - previous_close), abs(low - previous_close))
+      final tr = [
+        current.high - current.low,
+        (current.high - previous.close).abs(),
+        (current.low - previous.close).abs(),
+      ].reduce((a, b) => a > b ? a : b);
+
+      // +DM = high - previous_high (if positive and > -DM, else 0)
+      // -DM = previous_low - low (if positive and > +DM, else 0)
+      final upMove = current.high - previous.high;
+      final downMove = previous.low - current.low;
+
+      double pdm = 0;
+      double mdm = 0;
+
+      if (upMove > downMove && upMove > 0) {
+        pdm = upMove;
+      }
+      if (downMove > upMove && downMove > 0) {
+        mdm = downMove;
+      }
+
+      trList.add(tr);
+      pdmList.add(pdm);
+      mdmList.add(mdm);
+    }
+
+    // 步骤2: 威尔德平滑 TR, +DM, -DM
+    List<double> smoothedTR = List.filled(data.length, 0);
+    List<double> smoothedPDM = List.filled(data.length, 0);
+    List<double> smoothedMDM = List.filled(data.length, 0);
+
+    // 前N个值不足以计算，填充null
+    for (int i = 1; i < period; i++) {
+      adxList.add(null);
+      pdiList.add(null);
+      mdiList.add(null);
+    }
+
+    // 第一个平滑值 = 前N个值的简单平均
+    double sumTR = 0;
+    double sumPDM = 0;
+    double sumMDM = 0;
+    for (int i = 1; i <= period; i++) {
+      sumTR += trList[i];
+      sumPDM += pdmList[i];
+      sumMDM += mdmList[i];
+    }
+
+    smoothedTR[period] = sumTR / period;
+    smoothedPDM[period] = sumPDM / period;
+    smoothedMDM[period] = sumMDM / period;
+
+    // 后续值使用威尔德平滑: smoothed = (previous_smoothed * (N-1) + current) / N
+    for (int i = period + 1; i < data.length; i++) {
+      smoothedTR[i] = (smoothedTR[i - 1] * (period - 1) + trList[i]) / period;
+      smoothedPDM[i] = (smoothedPDM[i - 1] * (period - 1) + pdmList[i]) / period;
+      smoothedMDM[i] = (smoothedMDM[i - 1] * (period - 1) + mdmList[i]) / period;
+    }
+
+    // 步骤3: 计算 +DI 和 -DI
+    List<double> pdiValues = List.filled(data.length, 0);
+    List<double> mdiValues = List.filled(data.length, 0);
+    List<double> dxValues = List.filled(data.length, 0);
+
+    for (int i = period; i < data.length; i++) {
+      if (smoothedTR[i] != 0) {
+        pdiValues[i] = (smoothedPDM[i] / smoothedTR[i]) * 100;
+        mdiValues[i] = (smoothedMDM[i] / smoothedTR[i]) * 100;
+
+        pdiList.add(pdiValues[i]);
+        mdiList.add(mdiValues[i]);
+
+        // 步骤4: 计算 DX
+        final diSum = pdiValues[i] + mdiValues[i];
+        if (diSum != 0) {
+          dxValues[i] = ((pdiValues[i] - mdiValues[i]).abs() / diSum) * 100;
+        }
+      } else {
+        pdiList.add(0);
+        mdiList.add(0);
+      }
+    }
+
+    // 步骤5: 计算 ADX (DX的威尔德平滑)
+    // 需要等待至少 period*2-1 根K线
+    for (int i = period; i < period * 2 - 1 && i < data.length; i++) {
+      adxList.add(null);
+    }
+
+    if (data.length >= period * 2) {
+      // 第一个ADX = 前N个DX的简单平均
+      double sumDX = 0;
+      for (int i = period; i < period * 2; i++) {
+        sumDX += dxValues[i];
+      }
+      double adx = sumDX / period;
+      adxList.add(adx);
+
+      // 后续ADX使用威尔德平滑
+      for (int i = period * 2; i < data.length; i++) {
+        adx = (adx * (period - 1) + dxValues[i]) / period;
+        adxList.add(adx);
+      }
+    }
+
+    return ADXResult(adx: adxList, pdi: pdiList, mdi: mdiList);
+  }
+
+  /// 计算CZSC分析结果
+  /// 
+  /// 为了性能考虑，只分析最近的maxKlines根K线
+  /// 默认最多分析1000根K线，避免数据量过大导致卡顿
+  CZSCResult calculateCZSC(List<KlineModel> data, String symbol, {int maxKlines = 1000}) {
+    if (data.isEmpty) {
+      return CZSCResult(biList: [], zsList: [], fxList: []);
+    }
+
+    try {
+      // 限制数据量：只分析最近的maxKlines根K线
+      final startIdx = data.length > maxKlines ? data.length - maxKlines : 0;
+      final dataToAnalyze = data.sublist(startIdx);
+      
+      // 将KlineModel转换为RawBar
+      final bars = <RawBar>[];
+      for (int i = 0; i < dataToAnalyze.length; i++) {
+        final k = dataToAnalyze[i];
+        bars.add(RawBar(
+          symbol: symbol,
+          id: i,
+          dt: k.time,
+          freq: Freq.f5, // 默认使用5分钟周期
+          open: k.open,
+          close: k.close,
+          high: k.high,
+          low: k.low,
+          vol: k.volume,
+          amount: 0,
+        ));
+      }
+
+      // 创建CZSC分析器
+      final czsc = CZSC(bars: bars, maxBiNum: 200);
+
+      return CZSCResult(
+        biList: czsc.biList,
+        zsList: czsc.zsList,
+        fxList: czsc.fxList,
+      );
+    } catch (e) {
+      // 如果分析失败，返回空结果
+      print('CZSC calculation error: $e');
+      return CZSCResult(biList: [], zsList: [], fxList: []);
+    }
+  }
+
   // ========== 内部辅助方法 ==========
 
   List<double> _calculateEMA(List<KlineModel> data, int period) {
@@ -327,4 +520,35 @@ class KDJResult {
   final List<double?> j;
 
   KDJResult({required this.k, required this.d, required this.j});
+}
+
+/// CZSC分析结果
+class CZSCResult {
+  final List<BI> biList;
+  final List<ZS> zsList;
+  final List<FX> fxList;
+
+  CZSCResult({
+    required this.biList,
+    required this.zsList,
+    required this.fxList,
+  });
+}
+
+/// ADX计算结果
+class ADXResult {
+  /// ADX值（平均趋向指标）
+  final List<double?> adx;
+  
+  /// +DI值（正向趋向指标）
+  final List<double?> pdi;
+  
+  /// -DI值（负向趋向指标）
+  final List<double?> mdi;
+
+  ADXResult({
+    required this.adx,
+    required this.pdi,
+    required this.mdi,
+  });
 }

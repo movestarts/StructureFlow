@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:csv/csv.dart';
 import 'package:intl/intl.dart';
 
 import '../models/kline_model.dart';

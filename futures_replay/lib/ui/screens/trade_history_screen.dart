@@ -12,7 +12,6 @@ import '../../models/kline_model.dart';
 import '../../services/account_service.dart';
 import '../../models/trade_record.dart';
 import 'trade_history_chart_screen.dart';
-import 'session_detail_screen.dart';
 
 /// 交易历史记录页面
 class TradeHistoryScreen extends StatefulWidget {

@@ -10,8 +10,8 @@ class ChartViewController extends ChangeNotifier {
   bool _isUserDragging = false;      // 用户是否正在拖动
   bool _autoFollowLatest = true;     // 是否自动跟随最新K线
   
-  double _candleWidth = 8.0;
-  double _candleGap = 2.0;
+  final double _candleWidth = 8.0;
+  final double _candleGap = 2.0;
   double _scale = 1.0;
   
   int _totalDataLength = 0;
@@ -115,12 +115,40 @@ class ChartViewController extends ChangeNotifier {
   }
   
   /// 缩放
-  void setScale(double newScale) {
+  /// [newScale] 新的缩放比例
+  /// [centerRatio] 缩放中心点位置比例（0.0-1.0），默认0.5（中心）
+  void setScale(double newScale, {double centerRatio = 0.5}) {
+    final oldScale = _scale;
     _scale = newScale.clamp(0.5, 3.0);
     
-    // 重新计算可见范围
-    final visibleCount = (_screenWidth / step).floor();
-    _visibleStartIndex = (_visibleEndIndex - visibleCount + 1).clamp(0, _totalDataLength);
+    // 如果缩放比例没有实际变化，直接返回
+    if (_scale == oldScale) return;
+    
+    // 计算旧的和新的可见K线数量
+    final oldStep = _candleWidth * oldScale + _candleGap;
+    final newStep = step;
+    final oldVisibleCount = (_screenWidth / oldStep).floor();
+    final newVisibleCount = (_screenWidth / newStep).floor();
+    
+    // 计算缩放前的中心索引
+    final centerIndex = _visibleStartIndex + (oldVisibleCount * centerRatio).round();
+    
+    // 根据新的可见数量，重新计算起始和结束索引，保持中心位置
+    _visibleStartIndex = (centerIndex - (newVisibleCount * centerRatio).round()).clamp(0, _totalDataLength);
+    _visibleEndIndex = (_visibleStartIndex + newVisibleCount).clamp(0, _totalDataLength);
+    
+    // 如果结束索引超出范围，需要调整起始索引
+    if (_visibleEndIndex > _totalDataLength) {
+      _visibleEndIndex = _totalDataLength;
+      _visibleStartIndex = (_visibleEndIndex - newVisibleCount).clamp(0, _totalDataLength);
+    }
+    
+    // 检查是否回到最新位置
+    if (_visibleEndIndex >= _totalDataLength - 2) {
+      _autoFollowLatest = true;
+    } else {
+      _autoFollowLatest = false;
+    }
     
     notifyListeners();
   }

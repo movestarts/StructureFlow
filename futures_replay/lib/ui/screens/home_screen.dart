@@ -2,11 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../../services/account_service.dart';
+import '../../services/data_service.dart';
+import '../../services/builtin_data_service.dart';
+import '../../services/database_service.dart';
+import '../../models/kline_model.dart';
+import '../../models/period.dart';
 import 'setup_screen.dart';
 import 'position_calculator_screen.dart';
 import 'operation_analysis_screen.dart';
 import 'settings_screen.dart';
 import 'trade_history_screen.dart';
+import 'main_screen.dart';
+import 'dart:io';
+import 'dart:math';
+import 'package:path_provider/path_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -396,6 +405,7 @@ class _HomeScreenState extends State<HomeScreen> {
           runSpacing: 12,
           children: [
             _buildToolCard(Icons.folder_open, '从存档开始', const Color(0xFFFF6B35)),
+            _buildToolCard(Icons.data_object, '示例数据', const Color(0xFF10B981), onTap: _showBuiltinDataDialog),
             _buildToolCard(Icons.history, '历史记录', const Color(0xFF6B7280), onTap: () {
               Navigator.push(
                 context,
@@ -403,7 +413,6 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             }),
             _buildToolCard(Icons.school, '新手教程', AppColors.success),
-            _buildToolCard(Icons.security, 'TOTP验证器', const Color(0xFF3B3F8C)),
             _buildToolCard(Icons.calculate, '仓位计算', AppColors.primary, onTap: () {
               Navigator.push(
                 context,
@@ -462,9 +471,321 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _onModeSelected(TrainingType type) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => SetupScreen(trainingType: type)),
+    // 随机训练模式：随机选择品种和时间
+    if (type == TrainingType.futuresRandom) {
+      _startRandomFuturesReplay();
+    } else {
+      // 其他模式（包括复盘模式）：进入配置页面
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => SetupScreen(trainingType: type)),
+      );
+    }
+  }
+
+  /// 随机合约训练：随机品种+随机时间
+  Future<void> _startRandomFuturesReplay() async {
+    try {
+      // 1. 加载所有期货合约文件
+      final appDocDir = await getApplicationDocumentsDirectory();
+      List<File> futuresFiles = [];
+
+      final baseDir = Directory('${appDocDir.path}${Platform.pathSeparator}cryptotrainer${Platform.pathSeparator}csv');
+      if (await baseDir.exists()) {
+        final futuresDir = Directory('${baseDir.path}${Platform.pathSeparator}futures');
+        if (await futuresDir.exists()) {
+          futuresFiles = futuresDir.listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.csv')).toList();
+        }
+      }
+
+      if (futuresFiles.isEmpty) {
+        _showError('没有找到期货合约数据\n请先导入CSV文件');
+        return;
+      }
+
+      // 2. 随机选择一个合约
+      final random = Random();
+      final selectedFile = futuresFiles[random.nextInt(futuresFiles.length)];
+      final filename = selectedFile.path.split(Platform.pathSeparator).last;
+      final instrumentCode = filename.replaceAll('.csv', '').replaceAll(RegExp(r'[_\-\d]'), '').toUpperCase();
+
+      // 显示加载提示
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => Center(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: _cardBg,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: AppColors.primary),
+                const SizedBox(height: 16),
+                Text('正在加载 $instrumentCode...', style: TextStyle(color: _textPrimary)),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      // 3. 加载数据
+      final service = DataService();
+      final symbol = filename.replaceAll('.csv', '');
+      final allData = await service.loadWithCache(selectedFile.path, symbol);
+
+      if (!mounted) return;
+      Navigator.pop(context); // 关闭加载提示
+
+      if (allData.isEmpty) {
+        _showError('数据加载失败或为空');
+        return;
+      }
+
+      // 4. 随机选择起始时间（在前70%的数据范围内）
+      final maxStartIndex = (allData.length * 0.7).floor();
+      final minStartIndex = (allData.length * 0.1).floor(); // 跳过前10%，避免数据初期不稳定
+      final randomStartIndex = minStartIndex + random.nextInt(maxStartIndex - minStartIndex);
+
+      // 5. 显示简单配置对话框
+      _showQuickConfigDialog(
+        allData: allData,
+        startIndex: randomStartIndex,
+        instrumentCode: instrumentCode,
+        csvPath: selectedFile.path,
+      );
+    } catch (e) {
+      _showError('启动失败: $e');
+    }
+  }
+
+  /// 显示快速配置对话框（类似图二）
+  void _showQuickConfigDialog({
+    required List<KlineModel> allData,
+    required int startIndex,
+    required String instrumentCode,
+    required String csvPath,
+  }) {
+    int displayMode = 0; // 0=竖屏, 1=横屏
+    bool enableStopLoss = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return Dialog(
+              backgroundColor: _cardBg,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 标题
+                    Text(
+                      '止盈止损设置',
+                      style: TextStyle(
+                        color: _textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // 显示模式
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '显示模式',
+                        style: TextStyle(color: _textSecondary, fontSize: 14),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildQuickModeOption(
+                            label: '竖屏',
+                            value: 0,
+                            groupValue: displayMode,
+                            onChanged: (v) => setDialogState(() => displayMode = v),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _buildQuickModeOption(
+                            label: '横屏',
+                            value: 1,
+                            groupValue: displayMode,
+                            onChanged: (v) => setDialogState(() => displayMode = v),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // 启用止盈止损
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _surfaceClr,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '启用止盈止损',
+                              style: TextStyle(color: _textPrimary, fontSize: 15),
+                            ),
+                          ),
+                          Checkbox(
+                            value: enableStopLoss,
+                            onChanged: (v) => setDialogState(() => enableStopLoss = v ?? false),
+                            activeColor: AppColors.primary,
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 32),
+
+                    // 按钮
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              side: BorderSide(color: _borderClr),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: Text('取消', style: TextStyle(color: _textSecondary)),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          flex: 2,
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.pop(ctx); // 关闭对话框
+                              // 启动训练
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => Theme(
+                                    data: AppTheme.darkTheme,
+                                    child: MainScreen(
+                                      allData: allData,
+                                      startIndex: startIndex,
+                                      limit: 200, // 默认200根K线
+                                      instrumentCode: instrumentCode,
+                                      initialPeriod: Period.m5,
+                                      spotOnly: false,
+                                      csvPath: csvPath,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              backgroundColor: AppColors.primary,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text(
+                              '确认',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 快速配置对话框的单选选项
+  Widget _buildQuickModeOption({
+    required String label,
+    required int value,
+    required int groupValue,
+    required ValueChanged<int> onChanged,
+  }) {
+    final isSelected = value == groupValue;
+    return GestureDetector(
+      onTap: () => onChanged(value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primary.withOpacity(0.1) : _surfaceClr,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? AppColors.primary : _borderClr,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isSelected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              color: isSelected ? AppColors.primary : _textMuted,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? AppColors.primary : _textPrimary,
+                fontSize: 15,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 显示错误提示
+  void _showError(String message) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('提示', style: TextStyle(color: _textPrimary)),
+        content: Text(message, style: TextStyle(color: _textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('确定', style: TextStyle(color: AppColors.primary)),
+          ),
+        ],
+      ),
     );
   }
 
@@ -504,6 +825,150 @@ class _HomeScreenState extends State<HomeScreen> {
     return Center(
       child: Text('$label - 开发中', style: TextStyle(color: _textSecondary, fontSize: 18)),
     );
+  }
+
+  // 显示内置示例数据对话框
+  void _showBuiltinDataDialog() {
+    final builtinService = BuiltinDataService();
+    final symbols = builtinService.getBuiltinSymbols();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('内置示例数据'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '应用内置了真实的期货数据供您练习使用：',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+              const SizedBox(height: 16),
+              ...symbols.map((symbol) => _buildSymbolCard(symbol)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSymbolCard(BuiltinSymbol symbol) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => _loadBuiltinData(symbol),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.show_chart, color: AppColors.primary, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          symbol.name,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: _textPrimary,
+                          ),
+                        ),
+                        Text(
+                          symbol.symbol,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.arrow_forward_ios, size: 16, color: _textMuted),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                symbol.description,
+                style: TextStyle(fontSize: 12, color: _textMuted),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadBuiltinData(BuiltinSymbol symbol) async {
+    Navigator.pop(context); // 关闭对话框
+
+    // 显示加载提示
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('正在加载数据...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final db = DatabaseService();
+      final data = await db.getKlines(symbol.symbol, symbol.period);
+
+      if (!mounted) return;
+      Navigator.pop(context); // 关闭加载提示
+
+      if (data.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('数据为空，请检查是否已导入')),
+        );
+        return;
+      }
+
+      // 跳转到复盘页面
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MainScreen(
+            allData: data,
+            instrumentCode: symbol.symbol,
+            startIndex: 100, // 从100根K线开始
+            initialPeriod: Period.m5,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // 关闭加载提示
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加载失败: $e')),
+      );
+    }
   }
 }
 

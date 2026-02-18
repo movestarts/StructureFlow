@@ -486,7 +486,7 @@ class _ImportDataScreenState extends State<ImportDataScreen> {
 
                 // 市场类型下拉
                 DropdownButtonFormField<String>(
-                  value: _marketType,
+                  initialValue: _marketType,
                   onChanged: (v) {
                     if (v != null) setState(() => _marketType = v);
                   },
