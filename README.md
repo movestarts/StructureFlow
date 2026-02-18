@@ -11,6 +11,7 @@
 通过本系统，您可以像播放视频一样回放历史行情，随时暂停、加速，并进行模拟开平仓操作，从而在零风险的环境下积累实战经验。
 
 ## ✨ 核心功能
+<img width="1543" height="853" alt="image" src="https://github.com/user-attachments/assets/3c34d89a-546f-4e42-bbfc-3d3c6c69850e" />
 
 ### 1. K 线回放 (K-Line Replay)
 *   **多周期支持**：支持 1分钟、5分钟、15分钟、30分钟、1小时、4小时、1天等多种周期切换。
